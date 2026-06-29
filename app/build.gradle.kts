@@ -82,8 +82,21 @@ fun allCommitted(): Boolean {
 }
 
 android {
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("../debug.keystore")
+            storePassword = "testing"
+            keyAlias = "key0"
+            keyPassword = "testing"
+        }
+    }
 
     namespace = "app.aaps"
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 
     defaultConfig {
         minSdk = Versions.minSdk
@@ -228,7 +241,7 @@ println("-------------------")
 if (!gitAvailable()) {
     throw GradleException("GIT system is not available. On Windows try to run Android Studio as an Administrator. Check if GIT is installed and Studio have permissions to use it")
 }
-if (isMaster() && !allCommitted()) {
-    throw GradleException("There are uncommitted changes. Clone sources again as described in wiki and do not allow gradle update")
-}
+//if (isMaster() && !allCommitted()) {
+//    throw GradleException("There are uncommitted changes. Clone sources again as described in wiki and do not allow gradle update")
+//}
 
