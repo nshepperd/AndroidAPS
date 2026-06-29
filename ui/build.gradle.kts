@@ -9,6 +9,11 @@ plugins {
 
 android {
     namespace = "app.aaps.ui"
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {

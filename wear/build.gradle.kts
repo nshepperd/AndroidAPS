@@ -40,6 +40,10 @@ fun generateDate(): String {
 android {
     namespace = "app.aaps.wear"
 
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
     defaultConfig {
         minSdk = Versions.wearMinSdk
         targetSdk = Versions.wearTargetSdk

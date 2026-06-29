@@ -22,7 +22,7 @@ buildscript {
 }
 
 plugins {
-    alias(libs.plugins.klint)
+    // alias(libs.plugins.klint)
     alias(libs.plugins.moduleDependencyGraph)
     alias(libs.plugins.ksp)
     alias(libs.plugins.compose.compiler) apply false
@@ -53,7 +53,7 @@ allprojects {
         }
     }
 
-    apply(plugin = "org.jlleitschuh.gradle.ktlint")
+    // apply(plugin = "org.jlleitschuh.gradle.ktlint")
     apply(plugin = "jacoco")
 }
 

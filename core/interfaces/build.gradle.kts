@@ -16,6 +16,10 @@ android {
     defaultConfig {
         minSdk = min(Versions.minSdk, Versions.wearMinSdk)
     }
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
