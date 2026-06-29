@@ -33,3 +33,4 @@ wear/pumpcontrol/*
 /buildSrc/.kotlin
 .claude/settings.local.json
 /CLAUDE.md
+debug.keystore
