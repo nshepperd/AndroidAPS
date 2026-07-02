@@ -1,5 +1,6 @@
 package app.aaps.pump.rileylink2.link
 
+import app.aaps.pump.rileylink2.ble.BleConnection
 import app.aaps.pump.rileylink2.ble.BleLink
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
 import app.aaps.pump.rileylink2.rfspy.IncompatibleFirmwareException
@@ -53,6 +54,13 @@ class PumpLinkSupervisor(
 
     /** Observability hook (§11); called synchronously on the actor, keep it cheap. */
     var onTransition: (LinkTransition) -> Unit = {}
+
+    /** Observability hook (§11): every pump radio exchange outcome (RSSI telemetry). */
+    var onRadioOutcome: (MinimedRadio.RadioOutcome) -> Unit = {}
+
+    /** Observability hook (§11): periodic phone↔RileyLink BLE RSSI in dBm, while linked.
+     *  Enabled by [PumpLinkConfig.bleRssiPollInterval] > 0. */
+    var onBleRssi: (Int) -> Unit = {}
 
     private val journal = ArrayDeque<LinkTransition>()
     private val startMark = timeSource.markNow()
@@ -165,6 +173,7 @@ class PumpLinkSupervisor(
                 delay(config.backoffJitter(backoff(connectAttempt)))
                 continue
             }
+            var rssiPoller: Job? = null
             try {
                 setState(PumpLinkState.SessionInit, "ble operational")
                 epoch++
@@ -182,11 +191,13 @@ class PumpLinkSupervisor(
                     continue
                 }
                 connectAttempt = 0
+                rssiPoller = launchBleRssiPoller(conn)
                 val lost = CompletableDeferred<String>()
                 session.onSessionLost = { reason -> lost.complete(reason) }
-                val reason = serveSession(session, MinimedRadio(session), lost)
+                val reason = serveSession(session, MinimedRadio(session, onRadioOutcome), lost)
                 setState(PumpLinkState.LinkDown(reason), "session lost")
             } finally {
+                rssiPoller?.cancel()
                 withContext(NonCancellable) { runCatching { conn.close() } }
             }
         }
@@ -308,6 +319,28 @@ class PumpLinkSupervisor(
         cmd.deferred.complete(outcome)
     }
 
+    /**
+     * Periodic BLE RSSI sampling on the live connection. Shares the L0 one-op-at-a-time
+     * discipline, so a sample simply queues behind any in-flight radio op. Failures end the
+     * poller quietly — the link teardown path already reports the loss.
+     */
+    private fun launchBleRssiPoller(conn: BleConnection): Job? {
+        if (config.bleRssiPollInterval <= Duration.ZERO) return null
+        return scope.launch {
+            while (true) {
+                delay(config.bleRssiPollInterval)
+                val rssi = try {
+                    conn.readRemoteRssi(BLE_RSSI_READ_TIMEOUT)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@launch
+                }
+                onBleRssi(rssi)
+            }
+        }
+    }
+
     private fun sessionConfig() = SessionConfig(
         frequencyMHz = config.prefs.lastGoodFrequencyMHz ?: config.scanFrequenciesMHz.first(),
     )
@@ -334,6 +367,10 @@ class PumpLinkSupervisor(
             while (journal.size > config.journalCapacity) journal.removeFirst()
         }
         onTransition(transition)
+    }
+
+    private companion object {
+        val BLE_RSSI_READ_TIMEOUT = 5.seconds
     }
 
     private class CommandRequest<T>(

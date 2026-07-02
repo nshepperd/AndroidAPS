@@ -32,6 +32,9 @@ data class PumpLinkConfig(
     val maxCommandDuration: Duration = 5.minutes,
     /** Journal ring-buffer size (§11). */
     val journalCapacity: Int = 500,
+    /** Phone↔RileyLink BLE RSSI sampling cadence; ZERO disables (default — tests, and
+     *  callers that don't consume [PumpLinkSupervisor.onBleRssi]). */
+    val bleRssiPollInterval: Duration = Duration.ZERO,
 ) {
 
     override fun equals(other: Any?): Boolean = other === this

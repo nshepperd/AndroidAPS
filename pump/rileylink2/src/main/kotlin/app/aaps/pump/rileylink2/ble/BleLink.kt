@@ -45,6 +45,9 @@ interface BleConnection {
 
     suspend fun subscribe(char: CharId, timeout: Duration)
 
+    /** Signal strength of the BLE link itself (phone ↔ RileyLink), in dBm. */
+    suspend fun readRemoteRssi(timeout: Duration): Int
+
     /** Idempotent. Emits [BleEvent.Closed] with [CloseCause.LocalClose] if still open. */
     suspend fun close()
 }

@@ -56,6 +56,7 @@ class FakeOrangeLink(
     var dropAllCommands: Boolean = false
     var refuseConnections: Boolean = false
     var connectAttempts: Int = 0
+    var bleRssiDbm: Int = -55
 
     private var connection: FakeConnection? = null
 
@@ -109,6 +110,11 @@ class FakeOrangeLink(
                 responseCount = (responseCount + 1) and 0xFF
                 _events.emit(BleEvent.NotificationReceived(CharId.RADIO_RESPONSE_COUNT, byteArrayOf(responseCount.toByte())))
             }
+        }
+
+        override suspend fun readRemoteRssi(timeout: Duration): Int {
+            if (!open) throw BleException.LinkClosed(CloseCause.LinkLost(8))
+            return bleRssiDbm
         }
 
         override suspend fun write(char: CharId, bytes: ByteArray, timeout: Duration) {

@@ -7,6 +7,7 @@ import app.aaps.pump.medtronic.comm.MedtronicCommunicationManager
 import app.aaps.pump.medtronic.comm.ui.MedtronicUIComm
 import app.aaps.pump.medtronic.comm.ui.MedtronicUITask
 import app.aaps.pump.medtronic.dialog.MedtronicHistoryActivity
+import app.aaps.pump.medtronic.dialog.MedtronicSignalHistoryActivity
 import app.aaps.pump.medtronic.service.MedtronicPumpLinkService
 
 @Module
@@ -15,6 +16,9 @@ abstract class MedtronicModule {
 
     @ContributesAndroidInjector
     abstract fun contributesMedtronicHistoryActivity(): MedtronicHistoryActivity
+
+    @ContributesAndroidInjector
+    abstract fun contributesMedtronicSignalHistoryActivity(): MedtronicSignalHistoryActivity
     @ContributesAndroidInjector abstract fun contributesMedtronicFragment(): MedtronicFragment
 
     @ContributesAndroidInjector

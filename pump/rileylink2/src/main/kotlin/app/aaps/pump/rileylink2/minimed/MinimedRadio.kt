@@ -20,7 +20,11 @@ import kotlin.time.Duration.Companion.milliseconds
  * Fault classification (design §6.6): a garbled-but-present reply is REACHABILITY evidence
  * (wake/tune succeed on it); only command exchanges require a CRC-valid payload.
  */
-class MinimedRadio(private val session: RfspySession) {
+class MinimedRadio(
+    private val session: RfspySession,
+    /** Observability hook (§11): every exchange outcome, for RSSI/health telemetry. Keep cheap. */
+    private val onOutcome: (RadioOutcome) -> Unit = {},
+) {
 
     sealed interface RadioOutcome {
         /** CRC-valid pump message. */
@@ -70,15 +74,17 @@ class MinimedRadio(private val session: RfspySession) {
         val result = try {
             session.execute(cmd, (cmd.expectedDurationMs + BLE_LATENCY_MARGIN_MS).milliseconds)
         } catch (e: SessionClosedException) {
-            return RadioOutcome.LinkTrouble("session closed: ${e.message}")
+            return RadioOutcome.LinkTrouble("session closed: ${e.message}").also(onOutcome)
         }
-        return when (result) {
+        val outcome = when (result) {
             is RfspyResult.Ok            -> classifyRadioPayload(result.payload)
             is RfspyResult.RadioTimeout  -> RadioOutcome.PumpSilent
             is RfspyResult.Interrupted   -> RadioOutcome.LinkTrouble("interrupted (epoch=${result.epoch})")
             is RfspyResult.Uncertain     -> RadioOutcome.LinkTrouble("uncertain: ${result.cause}")
             is RfspyResult.FirmwareError -> RadioOutcome.LinkTrouble("firmware error 0x${result.code.toString(16)}")
         }
+        onOutcome(outcome)
+        return outcome
     }
 
     /** Payload after the 0xDD status byte: `[rssi][responseCount][encoded pump reply…]`. */

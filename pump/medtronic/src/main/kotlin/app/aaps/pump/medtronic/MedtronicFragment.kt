@@ -38,6 +38,7 @@ import app.aaps.pump.medtronic.databinding.MedtronicFragmentBinding
 import app.aaps.pump.medtronic.defs.BatteryType
 import app.aaps.pump.medtronic.defs.MedtronicCommandType
 import app.aaps.pump.medtronic.dialog.MedtronicHistoryActivity
+import app.aaps.pump.medtronic.dialog.MedtronicSignalHistoryActivity
 import app.aaps.pump.medtronic.driver.MedtronicPumpStatus
 import app.aaps.pump.medtronic.events.EventMedtronicPumpConfigurationChanged
 import app.aaps.pump.medtronic.events.EventMedtronicPumpValuesChanged
@@ -123,6 +124,10 @@ class MedtronicFragment : DaggerFragment() {
             } else {
                 displayNotConfiguredDialog()
             }
+        }
+
+        binding.signal.setOnClickListener {
+            startActivity(Intent(context, MedtronicSignalHistoryActivity::class.java))
         }
     }
 

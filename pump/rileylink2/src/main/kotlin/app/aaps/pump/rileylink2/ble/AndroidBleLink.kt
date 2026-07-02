@@ -110,7 +110,7 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Unit>()
 
-    private data class OpResult(val status: Int, val value: ByteArray?)
+    private data class OpResult(val status: Int, val value: ByteArray?, val rssi: Int = 0)
 
     val gattCallback = object : BluetoothGattCallback() {
 
@@ -147,6 +147,10 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
 
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             pendingOp?.complete(OpResult(status, null))
+        }
+
+        override fun onReadRemoteRssi(g: BluetoothGatt, rssi: Int, status: Int) {
+            pendingOp?.complete(OpResult(status, null, rssi))
         }
 
         @Deprecated("pre-33 callback")
@@ -194,6 +198,9 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
     override suspend fun subscribe(char: CharId, timeout: Duration) {
         withTimeout(timeout) { subscribeInternal(GattUuids.of(char)) }
     }
+
+    override suspend fun readRemoteRssi(timeout: Duration): Int =
+        executeOp("readRemoteRssi", timeout) { requireGatt().readRemoteRssi() }.rssi
 
     private suspend fun subscribeInternal(uuid: UUID) {
         val characteristic = findCharacteristic(uuid)

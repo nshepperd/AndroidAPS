@@ -35,6 +35,7 @@ import app.aaps.pump.rileylink2.link.PumpLinkConfig
 import app.aaps.pump.rileylink2.link.PumpLinkPrefs
 import app.aaps.pump.rileylink2.link.PumpLinkState
 import app.aaps.pump.rileylink2.link.PumpLinkSupervisor
+import app.aaps.pump.rileylink2.link.SignalHistory
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
 import dagger.android.DaggerService
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +44,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * rileylink2 replacement for RileyLinkMedtronicService: owns the coroutine scope, the
@@ -68,6 +70,9 @@ open class MedtronicPumpLinkService : DaggerService() {
 
     var supervisor: PumpLinkSupervisor? = null
         private set
+
+    /** Signal-quality history for the live chart; survives supervisor restarts. */
+    val signalHistory = SignalHistory()
 
     private var configuredAddress: String? = null
     private var configuredSerial: String? = null
@@ -124,6 +129,7 @@ open class MedtronicPumpLinkService : DaggerService() {
             probeMessage = probeMessage,
             scanFrequenciesMHz = frequencies,
             prefs = preferencesBackedLinkPrefs,
+            bleRssiPollInterval = 15.seconds,
         )
         val newSupervisor = PumpLinkSupervisor(
             bleLink = AndroidBleLink(this) { line -> aapsLogger.debug(LTag.PUMPBTCOMM, line) },
@@ -135,8 +141,11 @@ open class MedtronicPumpLinkService : DaggerService() {
                 LTag.PUMPBTCOMM,
                 "LINKV2: ${transition.from} -> ${transition.to} (${transition.cause}) at ${transition.atElapsed.inWholeMilliseconds}ms"
             )
+            signalHistory.recordTransition(transition)
             bridgeState(transition.to)
         }
+        newSupervisor.onRadioOutcome = signalHistory::recordRadioOutcome
+        newSupervisor.onBleRssi = signalHistory::recordBleRssi
         supervisor = newSupervisor
         configuredAddress = address
         configuredSerial = medtronicPumpStatus.serialNumber
