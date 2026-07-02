@@ -53,6 +53,7 @@ class FakeOrangeLink(
     // ---- test hooks ----
     var radioBehavior: (RadioTx) -> RadioReply = { RadioReply.Silence }
     var dropNextCommand: Boolean = false
+    var dropAllCommands: Boolean = false
 
     private var connection: FakeConnection? = null
 
@@ -111,6 +112,7 @@ class FakeOrangeLink(
             if (char != CharId.RADIO_DATA) return
             // firmware app_aps.c:664 — malformed frames dropped with no observable effect
             if (bytes.isEmpty() || bytes[0].toInt() and 0xFF != bytes.size - 1 || bytes.size == 1) return
+            if (dropAllCommands) return
             if (dropNextCommand) {
                 dropNextCommand = false
                 return
