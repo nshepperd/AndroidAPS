@@ -54,6 +54,8 @@ class FakeOrangeLink(
     var radioBehavior: (RadioTx) -> RadioReply = { RadioReply.Silence }
     var dropNextCommand: Boolean = false
     var dropAllCommands: Boolean = false
+    var refuseConnections: Boolean = false
+    var connectAttempts: Int = 0
 
     private var connection: FakeConnection? = null
 
@@ -61,6 +63,8 @@ class FakeOrangeLink(
         flowOf(ScanHit(address, "OrangeLink", rssi = -60))
 
     override suspend fun connect(address: String, timeout: Duration): BleConnection {
+        connectAttempts++
+        if (refuseConnections) throw BleException.ConnectFailed(gattStatus = 133, message = "refused (fake)")
         check(this.connection?.open != true) { "fake supports one connection at a time" }
         return FakeConnection().also { connection = it }
     }
