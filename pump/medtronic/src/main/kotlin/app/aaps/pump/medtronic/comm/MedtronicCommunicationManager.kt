@@ -126,15 +126,21 @@ class MedtronicCommunicationManager @Inject constructor(
         for (retry in 0..4) {
             aapsLogger.debug(LTag.PUMPCOMM, "isDeviceReachable. Waking pump... " + if (retry != 0) " (retry $retry)" else "")
             val connected = connectToDevice()
-            if (connected) return true
+            if (connected) {
+                // RECONN: pump answered on attempt #retry -> full path (BLE + radio + pump) is healthy.
+                aapsLogger.warn(LTag.PUMPCOMM, "RECONN: pump reachable on attempt={} (BLE+radio+pump OK)", retry)
+                return true
+            }
             SystemClock.sleep(1000)
         }
         if (state !== PumpDeviceState.PumpUnreachable) medtronicPumpStatus.pumpDeviceState = PumpDeviceState.PumpUnreachable
-        if (!canPreventTuneUp) {
-            val diff = System.currentTimeMillis() - medtronicPumpStatus.lastConnection
-            if (diff > RILEYLINK_TIMEOUT) {
-                serviceTaskExecutor.startTask(wakeAndTuneTaskProvider.get())
-            }
+        // RECONN: pump unreachable after 5 wake attempts. msSinceLastConnection + whether a tune-up is being scheduled
+        // tells you if AAPS is about to try recovering the radio link on its own.
+        val diff = System.currentTimeMillis() - medtronicPumpStatus.lastConnection
+        val willTuneUp = !canPreventTuneUp && diff > RILEYLINK_TIMEOUT
+        aapsLogger.warn(LTag.PUMPCOMM, "RECONN: pump UNREACHABLE after 5 attempts. msSinceLastConnection={} canPreventTuneUp={} schedulingTuneUp={}", diff, canPreventTuneUp, willTuneUp)
+        if (willTuneUp) {
+            serviceTaskExecutor.startTask(wakeAndTuneTaskProvider.get())
         }
         return false
     }

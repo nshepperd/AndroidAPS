@@ -163,6 +163,7 @@ class MedtronicPumpPlugin @Inject constructor(
     private val busyTimestamps: MutableList<Long> = ArrayList()
     private var hasTimeDateOrTimeZoneChanged = false
     private var isBusy = false
+    private var lastConnectRecoveryAttempt = 0L
 
     override fun onStart() {
         aapsLogger.debug(LTag.PUMP, deviceID() + " started. (V2.0006)")
@@ -321,7 +322,28 @@ class MedtronicPumpPlugin @Inject constructor(
 
     override fun isConnecting(): Boolean {
         if (displayConnectionMessages) aapsLogger.debug(LTag.PUMP, "MedtronicPumpPlugin::isConnecting")
-        return !isServiceSet || rileyLinkMedtronicService?.isInitialized != true
+        if (!isServiceSet) return true
+        val serviceState = rileyLinkServiceData.rileyLinkServiceState
+        return serviceState.isConnecting() || serviceState == RileyLinkServiceState.TuneUpDevice
+    }
+
+    override fun connect(reason: String) {
+        // Once the RileyLink lands in PumpConnectorError (e.g. tune-up ran while the pump was out of range) nothing
+        // re-attempts pump communication on its own. Recover here: every queued command ends up calling connect(),
+        // so retry a wake-and-tune, rate-limited as the queue calls this once per second while disconnected.
+        if (rileyLinkServiceData.rileyLinkServiceState != RileyLinkServiceState.PumpConnectorError) {
+            if (displayConnectionMessages) aapsLogger.debug(LTag.PUMP, "MedtronicPumpPlugin::connect ($reason) - no recovery needed")
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastConnectRecoveryAttempt < CONNECT_RECOVERY_MIN_INTERVAL) return
+        lastConnectRecoveryAttempt = now
+        if (rileyLinkMedtronicService?.verifyConfiguration() == true) {
+            aapsLogger.warn(LTag.PUMP, "MedtronicPumpPlugin::connect ($reason) - RileyLink in PumpConnectorError state, retrying wake and tune")
+            serviceTaskExecutor.startTask(wakeAndTuneTaskProvider.get())
+        } else {
+            aapsLogger.warn(LTag.PUMP, "MedtronicPumpPlugin::connect ($reason) - RileyLink in PumpConnectorError state but configuration invalid, cannot recover")
+        }
     }
 
     override fun getPumpStatus(reason: String) {
@@ -1239,6 +1261,10 @@ class MedtronicPumpPlugin @Inject constructor(
     }
 
     companion object {
+
+        // minimum time between wake-and-tune recovery attempts triggered from connect(); a tune scan itself
+        // takes ~80 s, so this allows at most one attempt per queue connection window
+        private const val CONNECT_RECOVERY_MIN_INTERVAL = 3 * 60 * 1000L
 
         val pumpFreqValues = arrayOf<CharSequence>(RileyLinkTargetFrequency.MedtronicUS.key!!, RileyLinkTargetFrequency.MedtronicWorldWide.key!!)
         val encodingValues = arrayOf<CharSequence>(RileyLinkEncodingType.FourByteSixByteLocal.key!!, RileyLinkEncodingType.FourByteSixByteRileyLink.key!!)

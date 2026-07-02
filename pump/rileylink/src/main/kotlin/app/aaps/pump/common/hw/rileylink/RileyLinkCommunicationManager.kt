@@ -45,6 +45,9 @@ abstract class RileyLinkCommunicationManager<T : RLMessage>(
     @Suppress("PrivatePropertyName")
     private val ALLOWED_PUMP_UNREACHABLE = 10 * 60 * 1000 // 10 minutes
 
+    @Suppress("PrivatePropertyName")
+    private val MAX_CONSECUTIVE_BLE_FAILURES = 3
+
     protected var receiverDeviceAwakeForMinutes: Int = 1 // override this in constructor of specific implementation
     protected var receiverDeviceID: String? = null // String representation of receiver device (ex. Pump (xxxxxx) or Pod (yyyyyy))
     protected var lastGoodReceiverCommunicationTime: Long = 0
@@ -205,6 +208,9 @@ abstract class RileyLinkCommunicationManager<T : RLMessage>(
         aapsLogger.info(LTag.PUMPBTCOMM, String.format(Locale.ENGLISH, "Scanning for receiver (%s)", receiverDeviceID))
         wakeUp(receiverDeviceAwakeForMinutes, false)
         val results = FrequencyScanResults()
+        // a null response means the write never made it to the RileyLink at all (BLE layer down) - unlike a radio
+        // timeout, trying more frequencies cannot help, and each doomed attempt burns seconds in BLE timeouts
+        var consecutiveBleFailures = 0
 
         for (i in frequencies.indices) {
             val tries = 3
@@ -219,6 +225,13 @@ abstract class RileyLinkCommunicationManager<T : RLMessage>(
                     RadioPacket(rileyLinkUtil, pumpMsgContent), 0.toByte(), 0.toByte(),
                     0.toByte(), 0.toByte(), 1250, 0.toByte()
                 )
+                if (resp == null) {
+                    consecutiveBleFailures++
+                    if (consecutiveBleFailures >= MAX_CONSECUTIVE_BLE_FAILURES) {
+                        aapsLogger.error(LTag.PUMPBTCOMM, "scanForPump: no response from RileyLink over BLE for $consecutiveBleFailures consecutive attempts, aborting scan")
+                        return 0.0
+                    }
+                } else consecutiveBleFailures = 0
                 if (resp?.wasTimeout() == true) {
                     aapsLogger.error(LTag.PUMPBTCOMM, String.format(Locale.ENGLISH, "scanForPump: Failed to find pump at frequency %.3f", frequencies[i]))
                 } else if (resp?.looksLikeRadioPacket() == true) {

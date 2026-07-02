@@ -179,6 +179,9 @@ class RFSpy @Inject constructor(
             prepended
         )
         if (writeCheck.resultCode != BLECommOperationResult.RESULT_SUCCESS) {
+            // RECONN: BLE-LAYER failure (the write never reached the OrangeLink). resultCode 4=NOT_CONFIGURED means the
+            // GATT is gone. This points at the phone<->OrangeLink BLE link (Group A), NOT the pump radio.
+            aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: BLE write FAILED (BLE-layer) resultCode={} isConnected={} notConnectedCount={}", writeCheck.resultCode, rileyLinkBle.isConnected, notConnectedCount)
             aapsLogger.error(LTag.PUMPBTCOMM, "BLE Write operation failed, code=" + writeCheck.resultCode)
             return null // will be a null (invalid) response
         }
@@ -192,6 +195,9 @@ class RFSpy @Inject constructor(
         val rawResponse = writeToDataRaw(bytes, responseTimeoutMs)
 
         if (rawResponse == null) {
+            // RECONN: no bytes back at all - either the BLE write failed (see BLE-layer log above) or the OrangeLink
+            // never answered over BLE. isConnected distinguishes a dead BLE link from a silent device.
+            aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: writeToData NO RESPONSE (BLE-layer/no-bytes) isConnected={} notConnectedCount->{}", rileyLinkBle.isConnected, notConnectedCount + 1)
             aapsLogger.error(LTag.PUMPBTCOMM, "writeToData: No response from RileyLink")
             notConnectedCount++
             return null
@@ -200,6 +206,9 @@ class RFSpy @Inject constructor(
         if (resp.wasInterrupted()) {
             aapsLogger.error(LTag.PUMPBTCOMM, "writeToData: RileyLink was interrupted")
         } else if (resp.wasTimeout()) {
+            // RECONN: RADIO-LAYER timeout - the OrangeLink answered over BLE (BLE is healthy) but heard nothing from the
+            // pump on 916MHz. This points at the OrangeLink<->pump radio link (Group B / pump out of range), NOT BLE.
+            aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: RADIO timeout (BLE healthy, pump silent) isConnected={} notConnectedCount->{}", rileyLinkBle.isConnected, notConnectedCount + 1)
             aapsLogger.error(LTag.PUMPBTCOMM, "writeToData: RileyLink reports timeout")
             notConnectedCount++
         } else if (resp.isOK()) {
