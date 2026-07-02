@@ -97,7 +97,22 @@ diagnostics, still present in the Eros-shared code). Build: `./gradlew :app:asse
   stack restart is a known silent-fail source, may explain post-restart attempts 4–6).
 - Post-F8 tune failed (pump silent) → PumpUnreachable at 19:49:47 — pump-side RF was
   already degraded before the toggle (freq scans −91…−108 vs −74 at session start);
-  likely bench geometry, not BT. Recovery pending as of this note.
+  likely bench geometry, not BT. Recovered unaided 19:55: retry tune hit a setFrequency
+  deadline → LinkDown → reconnect → Ready, ~13 s total.
+- **F1 drill (pump away ~20:25–21:11, chart build 67f62ace32)**: PASSED the recovers-unaided
+  bar — first solid exchange at 21:11:06 (−89 dBm) seconds after pump returned; TBR
+  1.25 U/h enacted at 21:11:08. Twist: pump was edge-of-range, not absent — the 20:42 tune
+  heard it at ~−100 and moved 916.70 → 916.55 MHz; marginal probes (−97…−101) succeeded
+  from 21:01. Effectively also a flapping-RF test; no dead ends throughout.
+- New watch items from the drills:
+  1. Escalation latency: supervisor held Ready ~13 min (20:25–20:38) while every wake
+     failed; notifications fired but reportPumpUnreachable/tune escalation lagged. Check
+     the plugin's escalation threshold vs intent.
+  2. setFrequency deadline (3 s) tears down the link mid-tune when firmware is busy —
+     seen twice (19:55 @916.5, 20:38 @916.55). Self-recovers in seconds but is churn;
+     consider a longer register-write deadline or draining radio ops first.
+  3. lastGoodFrequency now 916.55, chosen on a −100 signal during the drill; quick-path
+     keeps it while the pump answers. Re-seat with WakeAndTune at close range.
 - Zero `Uncertain`/`LinkTrouble`/GATT 133 across the whole v2 window.
 - Q3 wake-split: 2 of ~6 wakes needed >1 window, but RF variance muddies any comparison
   with legacy — not yet actionable.
