@@ -74,6 +74,34 @@ grep `LINKV2:` (v2 transitions), `PUMPCOMM`/`PUMPBTCOMM` (protocol), `RECONN:` (
 diagnostics, still present in the Eros-shared code). Build: `./gradlew :app:assembleFullDebug`
 (debug keystore = symlink `new-debug.keystore` → `../new-debug.keystore`).
 
+## Bench results so far (2026-07-02 evening, build 3a1b16b287)
+
+- Bring-up → Ready in 3.7 s; QueueWorker connect 2 s; multi-page history fetch OK
+  (3 transient frame-ACK retries, self-recovered; RSSI swinging −74…−106 on the bench).
+- F3-style BLE drop (GATT status 8, 19:18): unaided recovery LinkDown → Ready in 3.6 s;
+  legacy UI state bridge tracked correctly.
+- Pump-silent episode (19:24–19:26): 2 wake windows timed out, 3rd succeeded; "Pump
+  unreachable" raised + auto-cleared; SMB queued during outage delivered after recovery;
+  demanded tune 2.4 s, stayed 916.7 MHz. No dead ends, no manual intervention.
+- **I9 data point**: 19:26:53 SMB SetBolus hit the retry path (prelude ACKed, param frame
+  sent, pump silent → full resend → ACKed). Pump history shows **one** 0.5 U bolus at
+  19:27 — no double delivery. Benign half of the exposure (pump likely never decoded the
+  first param frame); the acts-but-ACK-lost half remains open until I9 tightening.
+- **F8 drill (phone BT toggle, 19:44)**: recovered unaided but slowly — write failure was
+  the first sign of BT-off (no adapter-state listener), then 7 blind 30 s connect attempts
+  ("bring-up timed out", zero GATT callbacks) while the Android BT stack restarted
+  (~2 min, logcat) and after; attempt 7 connected at 19:48:53, Ready <1 s later. Two
+  hardening items: (a) register `BluetoothAdapter.ACTION_STATE_CHANGED` — close link on
+  TURNING_OFF with a distinct `BtOff` cause, park reconnect until STATE_ON; (b) pass
+  `TRANSPORT_LE` explicitly to `connectGatt` (TRANSPORT_AUTO + cold device cache after a
+  stack restart is a known silent-fail source, may explain post-restart attempts 4–6).
+- Post-F8 tune failed (pump silent) → PumpUnreachable at 19:49:47 — pump-side RF was
+  already degraded before the toggle (freq scans −91…−108 vs −74 at session start);
+  likely bench geometry, not BT. Recovery pending as of this note.
+- Zero `Uncertain`/`LinkTrouble`/GATT 133 across the whole v2 window.
+- Q3 wake-split: 2 of ~6 wakes needed >1 window, but RF variance muddies any comparison
+  with legacy — not yet actionable.
+
 ## Paranoid-review checklist (requested, not yet done)
 
 1. `MedtronicCommunicationManager` — side-by-side diff against
