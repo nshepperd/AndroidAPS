@@ -21,6 +21,9 @@ dependencies {
     implementation(project(":core:validators"))
     implementation(project(":pump:common"))
     implementation(project(":pump:rileylink"))
+    implementation(project(":pump:rileylink2"))
+    implementation(platform(libs.kotlinx.coroutines.bom))
+    implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(project(":core:keys"))
     testImplementation(project(":shared:tests"))

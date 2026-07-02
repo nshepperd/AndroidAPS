@@ -2,7 +2,7 @@
 
     <application android:supportsRtl="true">
         <service
-            android:name=".service.RileyLinkMedtronicService"
+            android:name=".service.MedtronicPumpLinkService"
             android:enabled="true"
             android:exported="false" />
 
