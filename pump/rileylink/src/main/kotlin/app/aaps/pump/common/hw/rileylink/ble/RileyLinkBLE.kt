@@ -59,6 +59,9 @@ class RileyLinkBLE @Inject constructor(
     private val gattDebugEnabled = true
     private var manualDisconnect = false
 
+    // RECONN: timestamp (ms) of the last observed STATE_DISCONNECTED, used to measure reconnect latency.
+    private var disconnectedAtMillis: Long = 0
+
     //val bluetoothAdapter: BluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
     val bluetoothAdapter: BluetoothAdapter? get() = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter
     private val bluetoothGattCallback: BluetoothGattCallback
@@ -376,8 +379,19 @@ class RileyLinkBLE @Inject constructor(
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 super.onConnectionStateChange(gatt, status, newState)
 
+                // RECONN: log every GATT connection-state callback unconditionally (status code is the key signal:
+                // 8=GATT_CONN_TIMEOUT (out of range), 19=remote disconnect, 22=local termination, 133=Android bug).
+                aapsLogger.warn(
+                    LTag.PUMPBTCOMM,
+                    "RECONN: onConnectionStateChange status={} newState={} manualDisconnect={} isConnected={} gattAlive={}",
+                    status, newState, manualDisconnect, isConnected, bluetoothConnectionGatt != null
+                )
+
                 // https://github.com/NordicSemiconductor/puck-central-android/blob/master/PuckCentral/app/src/main/java/no/nordicsemi/puckcentral/bluetooth/gatt/GattManager.java#L117
                 if (status == 133) {
+                    // RECONN: this path calls disconnect()->close(), tearing down the autoConnect GATT. Nothing recreates it
+                    // automatically, so a 133 here likely means no reconnect until the app/service is restarted.
+                    aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: status 133 -> closing gatt; autoConnect torn down, isConnected(stale)={}", isConnected)
                     aapsLogger.error(LTag.PUMPBTCOMM, "Got the status 133 bug, closing gatt")
                     disconnect()
                     SystemClock.sleep(500)
@@ -395,11 +409,23 @@ class RileyLinkBLE @Inject constructor(
                     aapsLogger.warn(LTag.PUMPBTCOMM, "onConnectionStateChange " + getGattStatusMessage(status) + " " + stateMessage)
                 }
                 if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    // RECONN: link (re)established at GATT level. msSinceDisconnect measures how long the gap was
+                    // (-1 = no prior disconnect this session). This is the BLE-level reconnect latency.
+                    val msSinceDisconnect = if (disconnectedAtMillis > 0) System.currentTimeMillis() - disconnectedAtMillis else -1
+                    aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: STATE_CONNECTED status={} msSinceDisconnect={}", status, msSinceDisconnect)
                     if (status == BluetoothGatt.GATT_SUCCESS) rileyLinkUtil.sendBroadcastMessage(RileyLinkConst.Intents.BluetoothConnected)
                     else aapsLogger.debug(LTag.PUMPBTCOMM, "BT State connected, GATT status $status (${getGattStatusMessage(status)})")
                 } else if (newState == BluetoothProfile.STATE_CONNECTING || newState == BluetoothProfile.STATE_DISCONNECTING) {
                     aapsLogger.debug(LTag.PUMPBTCOMM, "We are in ${if (status == BluetoothProfile.STATE_CONNECTING) "Connecting" else "Disconnecting"} state.")
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    // RECONN: record the disconnect time and note that isConnected is NOT reset here on an unexpected drop
+                    // (only manual disconnect() clears it). A stale isConnected=true after this is hypothesis A2.
+                    disconnectedAtMillis = System.currentTimeMillis()
+                    aapsLogger.warn(
+                        LTag.PUMPBTCOMM,
+                        "RECONN: STATE_DISCONNECTED status={} manualDisconnect={} isConnected(stale)={} willClose={}",
+                        status, manualDisconnect, isConnected, manualDisconnect
+                    )
                     rileyLinkUtil.sendBroadcastMessage(RileyLinkConst.Intents.RileyLinkDisconnected)
                     if (manualDisconnect) close()
                     aapsLogger.warn(LTag.PUMPBTCOMM, "RileyLink Disconnected.")
@@ -465,6 +491,9 @@ class RileyLinkBLE @Inject constructor(
                     }
                     aapsLogger.info(LTag.PUMPBTCOMM, "Gatt device is RileyLink device: $rileyLinkFound")
                     if (rileyLinkFound) {
+                        // RECONN: GATT services discovered and RileyLink confirmed; this is the BLE layer fully back up.
+                        val msSinceDisconnect = if (disconnectedAtMillis > 0) System.currentTimeMillis() - disconnectedAtMillis else -1
+                        aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: services discovered, RileyLink ready. msSinceDisconnect={}", msSinceDisconnect)
                         isConnected = true
                         rileyLinkUtil.sendBroadcastMessage(RileyLinkConst.Intents.RileyLinkReady)
                     } else {

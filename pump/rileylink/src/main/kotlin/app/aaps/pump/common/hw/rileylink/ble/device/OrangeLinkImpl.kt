@@ -88,6 +88,9 @@ class OrangeLinkImpl @Inject constructor(
     fun startScan() {
         try {
             stopScan()
+            // RECONN: a scan is only started from findRileyLink (service init / reconfigure / new address) - NOT after an
+            // unexpected disconnect. Seeing this line tells you an explicit (re)scan was actually triggered.
+            aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: OrangeLink startScan for address={} timeoutMs={}", rileyLinkServiceData.rileyLinkAddress, TIME_OUT)
             aapsLogger.debug(LTag.PUMPBTCOMM, "startScan")
             handler.sendEmptyMessageDelayed(TIME_OUT_WHAT, TIME_OUT.toLong())
             val bluetoothLeScanner = rileyLinkBLE.bluetoothAdapter?.bluetoothLeScanner
@@ -108,6 +111,8 @@ class OrangeLinkImpl @Inject constructor(
             //val name = result.device.name
             val address = result.device.address
             if (rileyLinkServiceData.rileyLinkAddress.equals(address)) {
+                // RECONN: target OrangeLink found by scan -> connecting. rssi shows signal at the moment of match.
+                aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: scan matched target {} rssi={} -> connectGattInternal", address, result.rssi)
                 stopScan()
                 rileyLinkBLE.rileyLinkDevice = result.device
                 rileyLinkBLE.connectGattInternal()
@@ -120,6 +125,8 @@ class OrangeLinkImpl @Inject constructor(
 
         override fun onScanFailed(errorCode: Int) {
             super.onScanFailed(errorCode)
+            // RECONN: scan could not even start (1=already started, 2=app reg failed, etc.).
+            aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: OrangeLink scan FAILED errorCode={}", errorCode)
             stopScan()
         }
     }
@@ -128,7 +135,12 @@ class OrangeLinkImpl @Inject constructor(
         override fun handleMessage(msg: Message) {
             super.handleMessage(msg)
             when (msg.what) {
-                TIME_OUT_WHAT -> stopScan()
+                TIME_OUT_WHAT -> {
+                    // RECONN: 90s scan window elapsed with no match -> OrangeLink was not seen advertising. If this fires
+                    // repeatedly, the device is not discoverable (suspect firmware Group B / power-cycle needed).
+                    aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: OrangeLink scan TIMED OUT after {}ms with no match", TIME_OUT)
+                    stopScan()
+                }
             }
         }
     }

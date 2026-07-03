@@ -92,7 +92,11 @@ class RileyLinkBroadcastReceiver : DaggerBroadcastReceiver() {
     private fun processRileyLinkBroadcasts(action: String, context: Context): Boolean =
         when (action) {
             RileyLinkConst.Intents.RileyLinkDisconnected  -> {
-                if ((context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter.isEnabled)
+                val adapterEnabled = (context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter.isEnabled
+                // RECONN: on an unexpected drop the ONLY action here is to set an error state; nothing re-scans or
+                // re-connects. Recovery depends entirely on Android's autoConnect firing STATE_CONNECTED again.
+                aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: RileyLinkDisconnected received -> error state only (no rescan/reconnect). btAdapterEnabled={}", adapterEnabled)
+                if (adapterEnabled)
                     rileyLinkServiceData.setServiceState(RileyLinkServiceState.BluetoothError, RileyLinkError.RileyLinkUnreachable)
                 else
                     rileyLinkServiceData.setServiceState(RileyLinkServiceState.BluetoothError, RileyLinkError.BluetoothDisabled)
@@ -100,6 +104,7 @@ class RileyLinkBroadcastReceiver : DaggerBroadcastReceiver() {
             }
 
             RileyLinkConst.Intents.RileyLinkReady         -> {
+                aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: RileyLinkReady received -> starting reader/initialize pipeline. isOrange={}", rileyLinkServiceData.isOrange)
                 aapsLogger.warn(LTag.PUMPBTCOMM, "RileyLinkConst.Intents.RileyLinkReady")
                 // sendIPCNotification(RT2Const.IPC.MSG_note_WakingPump);
                 rileyLinkService?.rileyLinkBLE?.enableNotifications()
@@ -136,12 +141,21 @@ class RileyLinkBroadcastReceiver : DaggerBroadcastReceiver() {
     private fun processBluetoothBroadcasts(action: String): Boolean =
         when (action) {
             RileyLinkConst.Intents.BluetoothConnected   -> {
+                // RECONN: arrives only when Android's autoConnect GATT re-establishes. If you never see this after a
+                // RECONN: STATE_DISCONNECTED, autoConnect is not recovering (hypothesis A1/A3).
+                aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: BluetoothConnected received -> discoverServices directly. ts={}", System.currentTimeMillis())
                 aapsLogger.debug(LTag.PUMPBTCOMM, "Bluetooth - Connected")
-                serviceTaskExecutor.startTask(discoverGattServicesTaskProvider.get())
+                // Run discovery directly instead of via ServiceTaskExecutor: the executor is single-threaded and can be
+                // busy for minutes with a radio task whose BLE writes all fail until discovery re-configures the GATT,
+                // so queueing here would starve the one operation that can unblock everything else.
+                rileyLinkService?.rileyLinkBLE?.discoverServices()
                 true
             }
 
             RileyLinkConst.Intents.BluetoothReconnected -> {
+                // RECONN: only fired by RileyLinkBluetoothStateReceiver when the phone's BT adapter is toggled off->on,
+                // NOT when the OrangeLink reappears.
+                aapsLogger.warn(LTag.PUMPBTCOMM, "RECONN: BluetoothReconnected (adapter toggled) -> bluetoothInit + discover. ts={}", System.currentTimeMillis())
                 aapsLogger.debug(LTag.PUMPBTCOMM, "Bluetooth - Reconnecting")
                 rileyLinkService?.bluetoothInit()
                 serviceTaskExecutor.startTask(discoverGattServicesTaskProvider.get().with(true))

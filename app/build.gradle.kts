@@ -84,10 +84,10 @@ fun allCommitted(): Boolean {
 android {
     signingConfigs {
         getByName("debug") {
-            storeFile = file("../debug.keystore")
-            storePassword = "testing"
-            keyAlias = "key0"
-            keyPassword = "testing"
+            storeFile = file("../new-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 

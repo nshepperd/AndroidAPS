@@ -2,12 +2,17 @@
 
     <application android:supportsRtl="true">
         <service
-            android:name=".service.RileyLinkMedtronicService"
+            android:name=".service.MedtronicPumpLinkService"
             android:enabled="true"
             android:exported="false" />
 
         <activity
             android:name=".dialog.MedtronicHistoryActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme" />
+
+        <activity
+            android:name=".dialog.MedtronicSignalHistoryActivity"
             android:exported="false"
             android:theme="@style/AppTheme" />
 

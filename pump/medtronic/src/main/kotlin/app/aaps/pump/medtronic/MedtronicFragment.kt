@@ -38,6 +38,7 @@ import app.aaps.pump.medtronic.databinding.MedtronicFragmentBinding
 import app.aaps.pump.medtronic.defs.BatteryType
 import app.aaps.pump.medtronic.defs.MedtronicCommandType
 import app.aaps.pump.medtronic.dialog.MedtronicHistoryActivity
+import app.aaps.pump.medtronic.dialog.MedtronicSignalHistoryActivity
 import app.aaps.pump.medtronic.driver.MedtronicPumpStatus
 import app.aaps.pump.medtronic.events.EventMedtronicPumpConfigurationChanged
 import app.aaps.pump.medtronic.events.EventMedtronicPumpValuesChanged
@@ -96,7 +97,7 @@ class MedtronicFragment : DaggerFragment() {
         binding.pumpStatusIcon.text = "{fa-bed}"
 
         binding.history.setOnClickListener {
-            if (medtronicPumpPlugin.rileyLinkService?.verifyConfiguration() == true) {
+            if (medtronicPumpPlugin.medtronicService?.verifyConfiguration() == true) {
                 startActivity(Intent(context, MedtronicHistoryActivity::class.java))
             } else {
                 displayNotConfiguredDialog()
@@ -104,7 +105,7 @@ class MedtronicFragment : DaggerFragment() {
         }
 
         binding.refresh.setOnClickListener {
-            if (medtronicPumpPlugin.rileyLinkService?.verifyConfiguration() != true) {
+            if (medtronicPumpPlugin.medtronicService?.verifyConfiguration() != true) {
                 displayNotConfiguredDialog()
             } else {
                 binding.refresh.isEnabled = false
@@ -118,11 +119,15 @@ class MedtronicFragment : DaggerFragment() {
         }
 
         binding.stats.setOnClickListener {
-            if (medtronicPumpPlugin.rileyLinkService?.verifyConfiguration() == true) {
+            if (medtronicPumpPlugin.medtronicService?.verifyConfiguration() == true) {
                 startActivity(Intent(context, RileyLinkStatusActivity::class.java))
             } else {
                 displayNotConfiguredDialog()
             }
+        }
+
+        binding.signal.setOnClickListener {
+            startActivity(Intent(context, MedtronicSignalHistoryActivity::class.java))
         }
     }
 
@@ -158,7 +163,7 @@ class MedtronicFragment : DaggerFragment() {
             .observeOn(aapsSchedulers.main)
             .subscribe({
                            aapsLogger.debug(LTag.PUMP, "EventMedtronicPumpConfigurationChanged triggered")
-                           medtronicPumpPlugin.rileyLinkService?.verifyConfiguration()
+                           medtronicPumpPlugin.medtronicService?.verifyConfiguration()
                            updateGUI()
                        }, fabricPrivacy::logException)
         disposable += rxBus
@@ -348,7 +353,7 @@ class MedtronicFragment : DaggerFragment() {
         binding.reservoir.text = rh.gs(app.aaps.core.ui.R.string.reservoir_value, medtronicPumpStatus.reservoirRemainingUnits, medtronicPumpStatus.reservoirFullUnits)
         warnColors.setColorInverse(binding.reservoir, medtronicPumpStatus.reservoirRemainingUnits, 50, 20)
 
-        medtronicPumpPlugin.rileyLinkService?.verifyConfiguration()
+        medtronicPumpPlugin.medtronicService?.verifyConfiguration()
         binding.errors.text = medtronicPumpStatus.errorInfo
 
         if (rileyLinkServiceData.showBatteryLevel) {

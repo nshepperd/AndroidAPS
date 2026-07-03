@@ -591,6 +591,17 @@
             android:paddingEnd="0dp"
             android:text="@string/riley_statistics" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/signal"
+            style="@style/ButtonSmallFontStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:drawableTop="@drawable/ic_stats"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            android:text="@string/medtronic_signal_button" />
+
     </LinearLayout>
 
 </RelativeLayout>

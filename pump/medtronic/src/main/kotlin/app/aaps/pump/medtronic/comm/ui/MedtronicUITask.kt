@@ -6,6 +6,7 @@ import app.aaps.core.interfaces.pump.defs.PumpDeviceState
 import app.aaps.core.interfaces.rx.bus.RxBus
 import app.aaps.pump.common.events.EventRileyLinkDeviceStatusChange
 import app.aaps.pump.medtronic.comm.MedtronicCommunicationManager
+import app.aaps.pump.rileylink2.minimed.MinimedRadio
 import app.aaps.pump.medtronic.comm.history.pump.PumpHistoryEntry
 import app.aaps.pump.medtronic.data.dto.BasalProfile
 import app.aaps.pump.medtronic.data.dto.TempBasalPair
@@ -40,64 +41,65 @@ class MedtronicUITask @Inject constructor(
         return this
     }
 
-    fun execute(communicationManager: MedtronicCommunicationManager) {
+    suspend fun execute(radio: MinimedRadio, communicationManager: MedtronicCommunicationManager) {
         aapsLogger.debug(LTag.PUMP, "MedtronicUITask: @@@ In execute. $commandType")
         when (commandType) {
             MedtronicCommandType.PumpModel                                   -> {
-                result = communicationManager.getPumpModel()
+                result = communicationManager.getPumpModel(radio)
             }
 
             MedtronicCommandType.GetBasalProfileSTD                          -> {
-                result = communicationManager.getBasalProfile()
+                result = communicationManager.getBasalProfile(radio)
             }
 
             MedtronicCommandType.GetRemainingInsulin                         -> {
-                result = communicationManager.getRemainingInsulin()
+                result = communicationManager.getRemainingInsulin(radio)
             }
 
             MedtronicCommandType.GetRealTimeClock                            -> {
-                result = communicationManager.getPumpTime()
+                result = communicationManager.getPumpTime(radio)
                 //medtronicUtil.pumpTime = null
             }
 
             MedtronicCommandType.SetRealTimeClock                            -> {
-                result = communicationManager.setPumpTime()
+                result = communicationManager.setPumpTime(radio)
             }
 
             MedtronicCommandType.GetBatteryStatus                            -> {
-                result = communicationManager.getRemainingBattery()
+                result = communicationManager.getRemainingBattery(radio)
             }
 
             MedtronicCommandType.SetTemporaryBasal                           -> {
                 val tbr = getTbrSettings()
-                result = communicationManager.setTemporaryBasal(tbr)
+                result = communicationManager.setTemporaryBasal(radio, tbr)
             }
 
             MedtronicCommandType.ReadTemporaryBasal                          -> {
-                result = communicationManager.getTemporaryBasal()
+                result = communicationManager.getTemporaryBasal(radio)
             }
 
             MedtronicCommandType.Settings, MedtronicCommandType.Settings_512 -> {
-                result = communicationManager.getPumpSettings()
+                result = communicationManager.getPumpSettings(radio)
             }
 
             MedtronicCommandType.SetBolus                                    -> {
                 val amount = getDoubleFromParameters(0)
-                if (amount != null) result = communicationManager.setBolus(amount)
+                if (amount != null) result = communicationManager.setBolus(radio, amount)
             }
 
             MedtronicCommandType.CancelTBR                                   -> {
-                result = communicationManager.cancelTBR()
+                result = communicationManager.cancelTBR(radio)
             }
 
             MedtronicCommandType.SetBasalProfileSTD,
             MedtronicCommandType.SetBasalProfileA                            -> {
                 val profile = parameters!![0] as BasalProfile
-                result = communicationManager.setBasalProfile(profile)
+                result = communicationManager.setBasalProfile(radio, profile)
             }
 
             MedtronicCommandType.GetHistoryData                              -> {
                 result = communicationManager.getPumpHistory(
+                    radio,
                     parameters!![0] as PumpHistoryEntry?,
                     parameters!![1] as LocalDateTime?
                 )

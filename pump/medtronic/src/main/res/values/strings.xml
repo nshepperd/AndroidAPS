@@ -53,6 +53,14 @@
     <!--    <string name="medtronic_history_group_unknown">Unknowns</string>-->
     <!--    <string name="medtronic_history_group_all">All</string>-->
     <string name="medtronic_pump_history">Medtronic Pump History</string>
+    <string name="medtronic_signal_history">Signal History</string>
+    <string name="medtronic_signal_button">Signal</string>
+    <string name="medtronic_signal_no_data">No signal data yet — the rileylink2 driver collects samples while running.</string>
+    <string name="medtronic_signal_status">OrangeLink BLE: %1$s · Pump radio: %2$s</string>
+    <string name="medtronic_signal_series_ble">OL BLE</string>
+    <string name="medtronic_signal_series_pump">Pump</string>
+    <string name="medtronic_signal_series_silent">Pump silent</string>
+    <string name="medtronic_signal_series_events">Link events</string>
 
     <!-- <string name="medtronic_cmd_profile_not_set">Remote Basal profile setting is not supported. Please modify Basal profile on your pump manually.</string> -->
     <string name="medtronic_cmd_cancel_bolus_not_supported">You cancelled Bolus, after it was already set on Pump. Since Medtronic Pump doesn\'t support cancel, you will need to manually cancel it. Put the Pump into Suspend mode and then do Resume (if you still want to cancel). Application will pick up changes, on next update (in less than 5 minutes).</string>

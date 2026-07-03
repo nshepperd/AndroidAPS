@@ -7,7 +7,8 @@ import app.aaps.pump.medtronic.comm.MedtronicCommunicationManager
 import app.aaps.pump.medtronic.comm.ui.MedtronicUIComm
 import app.aaps.pump.medtronic.comm.ui.MedtronicUITask
 import app.aaps.pump.medtronic.dialog.MedtronicHistoryActivity
-import app.aaps.pump.medtronic.service.RileyLinkMedtronicService
+import app.aaps.pump.medtronic.dialog.MedtronicSignalHistoryActivity
+import app.aaps.pump.medtronic.service.MedtronicPumpLinkService
 
 @Module
 @Suppress("unused")
@@ -15,10 +16,13 @@ abstract class MedtronicModule {
 
     @ContributesAndroidInjector
     abstract fun contributesMedtronicHistoryActivity(): MedtronicHistoryActivity
+
+    @ContributesAndroidInjector
+    abstract fun contributesMedtronicSignalHistoryActivity(): MedtronicSignalHistoryActivity
     @ContributesAndroidInjector abstract fun contributesMedtronicFragment(): MedtronicFragment
 
     @ContributesAndroidInjector
-    abstract fun contributesRileyLinkMedtronicService(): RileyLinkMedtronicService
+    abstract fun contributesMedtronicPumpLinkService(): MedtronicPumpLinkService
 
     @ContributesAndroidInjector
     abstract fun medtronicCommunicationManagerProvider(): MedtronicCommunicationManager

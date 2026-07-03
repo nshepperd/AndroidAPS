@@ -2,7 +2,6 @@ package app.aaps.pump.medtronic.service
 
 import app.aaps.core.data.pump.defs.PumpType
 import app.aaps.pump.common.hw.rileylink.RileyLinkUtil
-import app.aaps.pump.common.hw.rileylink.ble.RFSpy
 import app.aaps.pump.common.hw.rileylink.ble.defs.RileyLinkTargetFrequency
 import app.aaps.pump.common.hw.rileylink.keys.RileyLinkStringKey
 import app.aaps.pump.common.hw.rileylink.keys.RileyLinkStringPreferenceKey
@@ -28,31 +27,35 @@ import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.whenever
 
 /**
- * Tests for RileyLinkMedtronicService.verifyConfiguration method
+ * Tests for MedtronicPumpLinkService.verifyConfiguration (ported from the legacy
+ * RileyLinkMedtronicService tests; the supervisor restart is stubbed out and counted).
  */
-class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
+class MedtronicPumpLinkServiceUTest : TestBaseWithProfile() {
 
     @Mock lateinit var rileyLinkUtil: RileyLinkUtil
     @Mock lateinit var medtronicPumpPlugin: MedtronicPumpPlugin
     @Mock lateinit var medtronicUtil: MedtronicUtil
     @Mock lateinit var medtronicCommunicationManager: MedtronicCommunicationManager
     @Mock lateinit var medtronicUIComm: MedtronicUIComm
-    @Mock lateinit var rfSpy: RFSpy
 
-    lateinit var service: RileyLinkMedtronicService
+    private class TestableService : MedtronicPumpLinkService() {
+
+        var supervisorRestarts = 0
+        override fun restartSupervisor() {
+            supervisorRestarts++
+        }
+    }
+
+    private lateinit var service: TestableService
     lateinit var medtronicPumpStatus: MedtronicPumpStatus
     lateinit var rileyLinkServiceData: RileyLinkServiceData
 
     @BeforeEach
     fun setup() {
-        // Create real instances for objects we need to inspect
         medtronicPumpStatus = MedtronicPumpStatus(preferences, rxBus, rileyLinkUtil)
         rileyLinkServiceData = RileyLinkServiceData(aapsLogger, rileyLinkUtil, rxBus)
 
-        // Create service instance
-        service = RileyLinkMedtronicService().also {
-
-        // Inject dependencies via reflection since it's a service with @Inject fields
+        service = TestableService().also {
             it.medtronicPumpPlugin = medtronicPumpPlugin
             it.medtronicUtil = medtronicUtil
             it.medtronicPumpStatus = medtronicPumpStatus
@@ -62,10 +65,7 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
             it.preferences = preferences
             it.rh = rh
             it.rileyLinkServiceData = rileyLinkServiceData
-            it.rileyLinkUtil = rileyLinkUtil
-            it.rfSpy = rfSpy
         }
-        // Setup common mock behaviors
         doReturn("").whenever(rh).gs(any<Int>())
         doReturn("").whenever(rh).gs(any<Int>(), any())
     }
@@ -78,7 +78,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
         whenever(preferences.get(RileyLinkStringKey.Name)).thenReturn("RileyLink")
         whenever(preferences.get(MedtronicIntPreferenceKey.MaxBolus)).thenReturn(10)
         whenever(preferences.get(MedtronicIntPreferenceKey.MaxBasal)).thenReturn(5)
-        whenever(preferences.get(RileyLinkStringPreferenceKey.Encoding)).thenReturn("FourByteSixByteLocal")
         whenever(preferences.get(MedtronicStringPreferenceKey.BatteryType)).thenReturn("medtronic_pump_battery_alkaline")
         whenever(preferences.get(RileylinkBooleanPreferenceKey.ShowReportedBatteryLevel)).thenReturn(true)
     }
@@ -98,26 +97,26 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
         assertThat(medtronicPumpStatus.maxBasal).isEqualTo(5.0)
         assertThat(medtronicPumpStatus.batteryType).isEqualTo(BatteryType.Alkaline)
         assertThat(rileyLinkServiceData.rileyLinkTargetFrequency).isEqualTo(RileyLinkTargetFrequency.MedtronicUS)
+        assertThat(service.supervisorRestarts).isEqualTo(1)      // no supervisor yet → started
     }
 
     @Test
     fun `test verifyConfiguration with invalid serial number format returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(MedtronicStringPreferenceKey.Serial)).thenReturn("12345") // Too short
-
         whenever(rh.gs(R.string.medtronic_error_serial_invalid)).thenReturn("Invalid serial number")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
 
         assertThat(result).isFalse()
         assertThat(medtronicPumpStatus.errorDescription).isEqualTo("Invalid serial number")
+        assertThat(service.supervisorRestarts).isEqualTo(0)
     }
 
     @Test
     fun `test verifyConfiguration with non-numeric serial number returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(MedtronicStringPreferenceKey.Serial)).thenReturn("ABCDEF")
-
         whenever(rh.gs(R.string.medtronic_error_serial_invalid)).thenReturn("Invalid serial number")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -130,7 +129,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration with empty pump type returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpType)).thenReturn("")
-
         whenever(rh.gs(R.string.medtronic_error_pump_type_not_set)).thenReturn("Pump type not set")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -143,7 +141,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration with invalid pump type format returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpType)).thenReturn("ABC")
-
         whenever(rh.gs(R.string.medtronic_error_pump_type_invalid)).thenReturn("Invalid pump type")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -166,7 +163,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration with empty RileyLink address returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(RileyLinkStringPreferenceKey.MacAddress)).thenReturn("")
-
         whenever(rh.gs(R.string.medtronic_error_rileylink_address_invalid)).thenReturn("Invalid RileyLink address")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -179,7 +175,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration with invalid RileyLink MAC address format returns false`() {
         setupValidConfiguration()
         whenever(preferences.get(RileyLinkStringPreferenceKey.MacAddress)).thenReturn("INVALID_MAC")
-
         whenever(rh.gs(R.string.medtronic_error_rileylink_address_invalid)).thenReturn("Invalid RileyLink address")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -192,15 +187,12 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration with valid RileyLink MAC address variations`() {
         setupValidConfiguration()
 
-        // Test with colons
         whenever(preferences.get(RileyLinkStringPreferenceKey.MacAddress)).thenReturn("AA:BB:CC:DD:EE:FF")
         assertThat(service.verifyConfiguration(forceRileyLinkAddressRenewal = false)).isTrue()
 
-        // Test lowercase
         whenever(preferences.get(RileyLinkStringPreferenceKey.MacAddress)).thenReturn("aa:bb:cc:dd:ee:ff")
         assertThat(service.verifyConfiguration(forceRileyLinkAddressRenewal = false)).isTrue()
 
-        // Test single digit hex values
         whenever(preferences.get(RileyLinkStringPreferenceKey.MacAddress)).thenReturn("0:1:2:3:4:5")
         assertThat(service.verifyConfiguration(forceRileyLinkAddressRenewal = false)).isTrue()
     }
@@ -209,12 +201,10 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration sets reservoir size based on pump type`() {
         setupValidConfiguration()
 
-        // Test 7xx series pump (300 units reservoir)
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpType)).thenReturn("722")
         service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
         assertThat(medtronicPumpStatus.reservoirFullUnits).isEqualTo(300)
 
-        // Test 5xx series pump (176 units reservoir)
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpType)).thenReturn("522")
         service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
         assertThat(medtronicPumpStatus.reservoirFullUnits).isEqualTo(176)
@@ -271,8 +261,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     @Test
     fun `test verifyConfiguration updates max bolus when value changes`() {
         setupValidConfiguration()
-
-        // Initial configuration
         medtronicPumpStatus.maxBolus = 5.0
         whenever(preferences.get(MedtronicIntPreferenceKey.MaxBolus)).thenReturn(10)
 
@@ -284,8 +272,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     @Test
     fun `test verifyConfiguration updates max basal when value changes`() {
         setupValidConfiguration()
-
-        // Initial configuration
         medtronicPumpStatus.maxBasal = 2.0
         whenever(preferences.get(MedtronicIntPreferenceKey.MaxBasal)).thenReturn(5)
 
@@ -308,12 +294,10 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     fun `test verifyConfiguration sets target frequency correctly`() {
         setupValidConfiguration()
 
-        // Test US frequency
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpFrequency)).thenReturn("medtronic_pump_frequency_us_ca")
         service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
         assertThat(rileyLinkServiceData.rileyLinkTargetFrequency).isEqualTo(RileyLinkTargetFrequency.MedtronicUS)
 
-        // Test Worldwide frequency
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpFrequency)).thenReturn("medtronic_pump_frequency_worldwide")
         service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
         assertThat(rileyLinkServiceData.rileyLinkTargetFrequency).isEqualTo(RileyLinkTargetFrequency.MedtronicWorldWide)
@@ -335,7 +319,6 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     @Test
     fun `test verifyConfiguration with pump type containing extra text`() {
         setupValidConfiguration()
-        // Pump type might be stored as "522 (Paradigm 522)" or similar
         whenever(preferences.get(MedtronicStringPreferenceKey.PumpType)).thenReturn("522 (Paradigm 522)")
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
@@ -347,13 +330,22 @@ class RileyLinkMedtronicServiceUTest : TestBaseWithProfile() {
     @Test
     fun `test verifyConfiguration clears error description on success`() {
         setupValidConfiguration()
-
-        // Set an initial error
         medtronicPumpStatus.errorDescription = "Previous error"
 
         val result = service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
 
         assertThat(result).isTrue()
         assertThat(medtronicPumpStatus.errorDescription).isEqualTo("-")
+    }
+
+    @Test
+    fun `test force address renewal always restarts supervisor`() {
+        setupValidConfiguration()
+        service.verifyConfiguration(forceRileyLinkAddressRenewal = false)
+        val restartsAfterFirst = service.supervisorRestarts
+
+        service.verifyConfiguration(forceRileyLinkAddressRenewal = true)
+
+        assertThat(service.supervisorRestarts).isEqualTo(restartsAfterFirst + 1)
     }
 }

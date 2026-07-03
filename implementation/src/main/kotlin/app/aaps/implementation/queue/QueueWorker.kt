@@ -140,7 +140,16 @@ class QueueWorker internal constructor(
                             aapsLogger.debug(LTag.PUMPQUEUE, "performing " + it.log())
                             rxBus.send(EventQueueChanged())
                             rxBus.send(EventPumpStatusChanged(it.status()))
-                            it.execute()
+                            try {
+                                it.execute()
+                            } catch (e: Exception) {
+                                // A throwing command must never leave `performing` set: every
+                                // subsequent worker run would skip both the pickup and the
+                                // disconnect branch and spin silently — the queue wedges until
+                                // app restart (observed 2026-07-03 with a driver NPE).
+                                aapsLogger.error(LTag.PUMPQUEUE, "command " + it.log() + " threw, failing it", e)
+                                it.cancel()
+                            }
                             queue.resetPerforming()
                             rxBus.send(EventQueueChanged())
                             lastCommandTime = System.currentTimeMillis()
