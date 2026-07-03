@@ -2,6 +2,7 @@ package app.aaps.pump.rileylink2.link
 
 import app.aaps.pump.rileylink2.ble.BleConnection
 import app.aaps.pump.rileylink2.ble.BleLink
+import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
 import app.aaps.pump.rileylink2.rfspy.IncompatibleFirmwareException
 import app.aaps.pump.rileylink2.rfspy.RfspySession
@@ -61,6 +62,10 @@ class PumpLinkSupervisor(
     /** Observability hook (§11): periodic phone↔RileyLink BLE RSSI in dBm, while linked.
      *  Enabled by [PumpLinkConfig.bleRssiPollInterval] > 0. */
     var onBleRssi: (Int) -> Unit = {}
+
+    /** RileyLink battery percent, polled while linked (first read at session bring-up).
+     *  Enabled by [PumpLinkConfig.batteryPollInterval] > 0. */
+    var onBatteryLevel: (Int) -> Unit = {}
 
     private val journal = ArrayDeque<LinkTransition>()
     private val startMark = timeSource.markNow()
@@ -180,6 +185,7 @@ class PumpLinkSupervisor(
                 continue
             }
             var rssiPoller: Job? = null
+            var batteryPoller: Job? = null
             try {
                 setState(PumpLinkState.SessionInit, "ble operational")
                 epoch++
@@ -198,12 +204,14 @@ class PumpLinkSupervisor(
                 }
                 connectAttempt = 0
                 rssiPoller = launchBleRssiPoller(conn)
+                batteryPoller = launchBatteryPoller(conn)
                 val lost = CompletableDeferred<String>()
                 session.onSessionLost = { reason -> lost.complete(reason) }
                 val reason = serveSession(session, MinimedRadio(session, onRadioOutcome), lost)
                 setState(PumpLinkState.LinkDown(reason), "session lost")
             } finally {
                 rssiPoller?.cancel()
+                batteryPoller?.cancel()
                 withContext(NonCancellable) { runCatching { conn.close() } }
             }
         }
@@ -347,6 +355,30 @@ class PumpLinkSupervisor(
         }
     }
 
+    /**
+     * Battery poll on the live connection: read at bring-up, then legacy RFSpy cadence
+     * (interval, accelerated below 20%). Same failure posture as the RSSI poller.
+     */
+    private fun launchBatteryPoller(conn: BleConnection): Job? {
+        if (config.batteryPollInterval <= Duration.ZERO) return null
+        return scope.launch {
+            while (true) {
+                val level = try {
+                    conn.read(CharId.BATTERY_LEVEL, BLE_RSSI_READ_TIMEOUT).firstOrNull()?.toInt()?.and(0xFF)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    return@launch
+                }
+                if (level != null) onBatteryLevel(level)
+                delay(
+                    if (level != null && level <= LOW_BATTERY_PERCENT) config.batteryPollLowInterval
+                    else config.batteryPollInterval
+                )
+            }
+        }
+    }
+
     private fun sessionConfig() = SessionConfig(
         frequencyMHz = config.prefs.lastGoodFrequencyMHz ?: config.scanFrequenciesMHz.first(),
     )
@@ -377,6 +409,7 @@ class PumpLinkSupervisor(
 
     private companion object {
         val BLE_RSSI_READ_TIMEOUT = 5.seconds
+        const val LOW_BATTERY_PERCENT = 20
     }
 
     private class CommandRequest<T>(

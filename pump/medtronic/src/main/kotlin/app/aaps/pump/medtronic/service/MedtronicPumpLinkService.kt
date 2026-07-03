@@ -44,6 +44,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -130,6 +131,8 @@ open class MedtronicPumpLinkService : DaggerService() {
             scanFrequenciesMHz = frequencies,
             prefs = preferencesBackedLinkPrefs,
             bleRssiPollInterval = 15.seconds,
+            batteryPollInterval = 30.minutes,
+            batteryPollLowInterval = 10.minutes,
         )
         val newSupervisor = PumpLinkSupervisor(
             bleLink = AndroidBleLink(this) { line -> aapsLogger.debug(LTag.PUMPBTCOMM, line) },
@@ -146,6 +149,7 @@ open class MedtronicPumpLinkService : DaggerService() {
         }
         newSupervisor.onRadioOutcome = signalHistory::recordRadioOutcome
         newSupervisor.onBleRssi = signalHistory::recordBleRssi
+        newSupervisor.onBatteryLevel = { percent -> rileyLinkServiceData.batteryLevel = percent }
         supervisor = newSupervisor
         configuredAddress = address
         configuredSerial = medtronicPumpStatus.serialNumber

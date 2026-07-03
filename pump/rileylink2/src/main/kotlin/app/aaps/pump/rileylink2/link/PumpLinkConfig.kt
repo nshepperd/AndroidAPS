@@ -35,6 +35,11 @@ data class PumpLinkConfig(
     /** Phone↔RileyLink BLE RSSI sampling cadence; ZERO disables (default — tests, and
      *  callers that don't consume [PumpLinkSupervisor.onBleRssi]). */
     val bleRssiPollInterval: Duration = Duration.ZERO,
+    /** RileyLink battery-level poll cadence (standard BLE Battery Service); ZERO disables.
+     *  First read happens immediately at session bring-up. */
+    val batteryPollInterval: Duration = Duration.ZERO,
+    /** Accelerated cadence once the reported level is ≤ 20% (legacy RFSpy parity). */
+    val batteryPollLowInterval: Duration = batteryPollInterval,
 ) {
 
     override fun equals(other: Any?): Boolean = other === this

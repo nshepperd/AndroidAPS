@@ -89,6 +89,34 @@ class PumpLinkSupervisorTest {
     }
 
     @Test
+    fun `battery poller reads at bring-up and reports via onBatteryLevel`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.pumpOn(916.55)
+        val levels = mutableListOf<Int>()
+        val supervisor = PumpLinkSupervisor(
+            bleLink = fake,
+            config = PumpLinkConfig(
+                deviceAddress = fake.address,
+                probeMessage = probe,
+                scanFrequenciesMHz = MinimedRadio.US_FREQUENCIES,
+                prefs = InMemoryPumpLinkPrefs(),
+                batteryPollInterval = 30.minutes,
+            ),
+            scope = backgroundScope,
+            timeSource = testScheduler.timeSource,
+        )
+        supervisor.onBatteryLevel = { levels += it }
+        supervisor.start()
+        supervisor.state.first { it is PumpLinkState.Ready }
+
+        advanceTimeBy(1.seconds)                              // first read is immediate
+        assertThat(levels).containsExactly(80)                // FakeOrangeLink reports 80%
+
+        advanceTimeBy(31.minutes)                             // next poll after the interval
+        assertThat(levels).containsExactly(80, 80)
+    }
+
+    @Test
     fun `withPump readyTimeout does not abandon a block that is already running (soak bug B2)`() = runTest {
         // 2026-07-03: a history read ground through RF retries past the 90 s readyTimeout and
         // was abandoned MID-EXECUTION, its result discarded. readyTimeout must bound only the
