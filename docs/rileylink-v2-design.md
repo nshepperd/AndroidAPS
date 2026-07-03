@@ -40,6 +40,39 @@ Facts extracted from the OrangeLink firmware source (`/home/em/Dev/aps/Orangelin
 `subg_to_ble/**`) and from AAPS logs of live incidents (2026-07-02). The design treats each as
 a hard constraint. References: `app_aps.c`, `app_ble.c`, `app_subg.c`, `ble_ips.c`, `rf69.c`.
 
+### 2.0 Corrections from firmware bench work (2026-07-03) — verified on hardware
+
+Bench experiments against a spare OrangeLink Pro (firmware-repo `tools/olbench.py`, evidence
+in `tools/logs/`) corrected three claims below. **Where this section conflicts with the rest
+of §2, this section wins.**
+
+1. **`0xBB` (interrupted) is NOT only "BLE dropped mid-op"** — on stock firmware, *any* new
+   command written while a radio op is in flight interrupts that op (`0xBB`) and then
+   executes. Verified: GET_VER injected 2 s into a 20 s listen was answered in 150 ms and
+   killed the listen. Implications: (a) single-in-flight discipline (§6.3) is doubly
+   mandatory — an accidental double-send silently kills the op in flight; (b) R2's
+   "0xBB ⇒ reboot/interruption evidence" stays sound *only* under that discipline, since the
+   client never self-inflicts 0xBB; (c) a v1-only CANCEL already exists in practice: writing
+   any cheap command (e.g. GET_STATE) aborts an in-flight listen. Q3's long-listen concern is
+   thereby resolved even before firmware v2.
+2. **BLE intake and disconnect handling are NOT starved during radio ops** (the SoftDevice
+   dispatches its events at a priority that preempts the firmware's command loop context).
+   Mid-op GATT traffic, instant re-advertising after mid-op disconnects, and mid-op writes
+   all verified working. The §2.1 "assume frequent status-8 drops / keep radio commands
+   short" guidance is thus not motivated by app-level starvation; observed status-8 drops in
+   the incidents most plausibly ARE the device resetting (see 3).
+3. **Reboot model correction**: the WDT is 3 s reload, fed every 2 s from a
+   higher-priority timer — "WDT starvation (32 s)" in §2.4 is wrong, and bench load did not
+   reproduce any reboot (clean soak + chaos client: spam, malformed frames, forced mid-op
+   disconnects — zero reboots). Live-incident reboots remain unexplained; leading suspects
+   are battery-sag/brownout under sustained TX and a rare RX-path stack overflow. Firmware
+   builds ≥ `gd5fa522d` expose a boot counter + reset reason via the DIS Software Revision
+   String — the session bring-up should read it when present (upgrades R1/R2 from inference
+   to measurement).
+
+Also note: firmware WI-2 (CANCEL) has been folded into WI-3 (owner decision 2026-07-03);
+`ProtocolVariant` gating per §14 is unaffected.
+
 ### 2.1 BLE surface
 
 | Item | Value | Consequence for v2 |
@@ -59,8 +92,9 @@ a hard constraint. References: `app_aps.c`, `app_ble.c`, `app_subg.c`, `ble_ips.
 - Command queue depth is **2, effectively 1** (`app_aps.c:42`); overflow drops the command with
   only a firmware-side log. Therefore the host must never pipeline: **exactly one in-flight
   command per session**, enforced by construction (§6.3).
-- Response codes: `0xDD` OK, `0xAA` radio-listen timeout, `0xBB` interrupted (BLE dropped
-  mid-radio-op), `0x11` bad param, `0x22` unknown opcode.
+- Response codes: `0xDD` OK, `0xAA` radio-listen timeout, `0xBB` interrupted (superseded by a
+  newly written command, or BLE dropped mid-radio-op — see §2.0.1), `0x11` bad param, `0x22`
+  unknown opcode.
 - `UPDATE_REG` executes immediately (not queued); everything else via the 10 ms command loop.
 - `CMD_RESET (0x07)` is **not implemented** — the host cannot soft-reset the device; the only
   resets are firmware WDT/fault reboots and physical power cycles.
@@ -79,8 +113,11 @@ a hard constraint. References: `app_aps.c`, `app_ble.c`, `app_subg.c`, `ble_ips.
 
 ### 2.4 Reboot semantics (the critical path)
 
-Firmware reboots on WDT starvation (32 s), hard fault, or brown-out. Observed live: reboot
-mid-tune with GATT status-8 disconnect and boot buzzer; re-advertising begins immediately.
+Firmware reboots on hard fault or brown-out (WDT starvation was disproven — 3 s reload fed
+from a higher-priority timer; see §2.0.3). Observed live: reboot mid-tune with GATT status-8
+disconnect and boot buzzer; re-advertising begins immediately. Root cause not yet reproduced
+on bench; treat every reboot as detectable-but-unexplained until the diag characteristic
+(§2.0.3) is deployed on the worn unit.
 
 On reboot **all volatile radio state is lost** and reset to defaults: frequency → 916 MHz
 default table, software encoding → NONE, preamble → 0, response count → 0, command queue →
