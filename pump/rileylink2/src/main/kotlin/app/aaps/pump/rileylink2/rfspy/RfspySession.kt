@@ -73,7 +73,9 @@ class RfspySession private constructor(
 
     private suspend fun executeLocked(cmd: RfspyCommand, responseDeadline: Duration): RfspyResult {
         val frame = frame(cmd.body)
-        val expectedCount = (lastCount + 1) and 0xFF
+        // Firmware wraps the counter mod 255, not mod 256: ble_ips.c zeroes it when it
+        // REACHES 0xff, so the value 255 never appears on the wire (0…254 → 0).
+        val expectedCount = (lastCount + 1) % 255
 
         val event: BleEvent? = try {
             withTimeoutOrNull(responseDeadline) {

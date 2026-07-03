@@ -88,6 +88,26 @@ class PumpLinkSupervisorTest {
         assertThat((radioOutcome as MinimedRadio.RadioOutcome.Reply).message).isEqualTo(pumpReply)
     }
 
+    @Test
+    fun `withPump readyTimeout does not abandon a block that is already running (soak bug B2)`() = runTest {
+        // 2026-07-03: a history read ground through RF retries past the 90 s readyTimeout and
+        // was abandoned MID-EXECUTION, its result discarded. readyTimeout must bound only the
+        // wait-for-Ready; a started block runs to its real outcome.
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.pumpOn(916.55)
+        val supervisor = startSupervisor(fake)
+        supervisor.state.first { it is PumpLinkState.Ready }
+
+        val outcome = supervisor.withPump("slow history read", readyTimeout = 5.seconds) { radio ->
+            radio.sendAndListen(probe)                       // started well within the timeout…
+            kotlinx.coroutines.delay(2.minutes)              // …but execution far outlives it
+            "completed"
+        }
+
+        assertThat(outcome).isInstanceOf(PumpCmdOutcome.Success::class.java)
+        assertThat((outcome as PumpCmdOutcome.Success).value).isEqualTo("completed")
+    }
+
     // -- F1: pump out of range, then back (the original 2026-07-02 incident) --------------------
 
     @Test

@@ -132,6 +132,11 @@ class PumpLinkSupervisor(
      *
      * The command implicitly carries demand, so a queued command is what drives recovery
      * retries while the pump is unreachable.
+     *
+     * [readyTimeout] bounds only the WAIT for the link to become Ready and pick this command
+     * up. Once the block has started it always runs to its real outcome (bounded by
+     * [PumpLinkConfig.maxCommandDuration]) — abandoning an in-flight block would discard the
+     * result of work that may already have reached the pump (2026-07-03 soak bug B2).
      */
     suspend fun <T> withPump(
         description: String,
@@ -143,11 +148,12 @@ class PumpLinkSupervisor(
         demand()
         try {
             (if (priority == PumpCmdPriority.HIGH) highCommands else normalCommands).send(request)
-            return withTimeoutOrNull(readyTimeout) { request.deferred.await() }
-                ?: run {
-                    request.abandoned = true
-                    PumpCmdOutcome.Unavailable(state.value)
-                }
+            withTimeoutOrNull(readyTimeout) { request.deferred.await() }
+                ?.let { return it }
+            // Timed out. If the actor already started the block, the wait is over but the
+            // work is real — see it through. Otherwise abandon before it can start.
+            return if (request.tryAbandon()) PumpCmdOutcome.Unavailable(state.value)
+            else request.deferred.await()
         } finally {
             releaseDemand()
         }
@@ -305,7 +311,7 @@ class PumpLinkSupervisor(
     private suspend fun runCommand(request: CommandRequest<*>, radio: MinimedRadio) {
         @Suppress("UNCHECKED_CAST")
         val cmd = request as CommandRequest<Any?>
-        if (cmd.abandoned) return
+        if (!cmd.tryStart()) return   // abandoned while queued
         val outcome: PumpCmdOutcome<Any?> = try {
             withTimeout(config.maxCommandDuration) { PumpCmdOutcome.Success(cmd.block(radio)) }
         } catch (e: TimeoutCancellationException) {
@@ -378,6 +384,17 @@ class PumpLinkSupervisor(
         val block: suspend (MinimedRadio) -> T,
     ) {
         val deferred = CompletableDeferred<PumpCmdOutcome<T>>()
-        @Volatile var abandoned: Boolean = false
+
+        /** PENDING → STARTED (actor wins) xor PENDING → ABANDONED (caller wins) — atomic,
+         *  so a block can never start after its caller has been told Unavailable. */
+        private val lifecycle = AtomicInteger(PENDING)
+        fun tryStart() = lifecycle.compareAndSet(PENDING, STARTED)
+        fun tryAbandon() = lifecycle.compareAndSet(PENDING, ABANDONED)
+
+        private companion object {
+            const val PENDING = 0
+            const val STARTED = 1
+            const val ABANDONED = 2
+        }
     }
 }

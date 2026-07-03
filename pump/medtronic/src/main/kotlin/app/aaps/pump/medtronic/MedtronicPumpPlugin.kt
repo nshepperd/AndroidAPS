@@ -956,7 +956,18 @@ class MedtronicPumpPlugin @Inject constructor(
         if (debugHistory) aapsLogger.debug(LTag.PUMP, "HST: After task")
         val historyResult = responseTask2?.result as PumpHistoryResult?
         if (debugHistory) aapsLogger.debug(LTag.PUMP, "HST: History Result: $historyResult")
-        val latestEntry = historyResult!!.latestEntry
+        if (historyResult == null) {
+            // Failed GetHistoryData leaves task.result null in the rileylink2 conversion
+            // (legacy always populated a partial result). Bail gracefully — the caller
+            // re-arms scheduleNextRefresh. The old `!!` here threw an unlogged NPE through
+            // CommandReadStatus.execute and wedged the command queue (2026-07-03 soak, B3).
+            aapsLogger.error(
+                LTag.PUMP,
+                "readPumpHistoryLogic: history read failed (${responseTask2?.errorDescription ?: "no task"}), skipping history processing"
+            )
+            return
+        }
+        val latestEntry = historyResult.latestEntry
         if (debugHistory) aapsLogger.debug(LTag.PUMP, "Last entry: " + latestEntry)
         if (latestEntry == null) // no new history to read
             return

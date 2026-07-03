@@ -107,7 +107,9 @@ class FakeOrangeLink(
                 val response = executeOnDevice(body)
                 if (!open) break
                 lastDataValue = response               // response is READ back, never pushed
-                responseCount = (responseCount + 1) and 0xFF
+                // firmware ble_ips.c:457-460 — counter is zeroed on REACHING 0xff, so the
+                // observable sequence is 0…254 → 0 (mod 255; the value 255 never appears)
+                responseCount = (responseCount + 1) % 255
                 _events.emit(BleEvent.NotificationReceived(CharId.RADIO_RESPONSE_COUNT, byteArrayOf(responseCount.toByte())))
             }
         }

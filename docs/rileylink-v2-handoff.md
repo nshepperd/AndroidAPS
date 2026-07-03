@@ -117,6 +117,30 @@ diagnostics, still present in the Eros-shared code). Build: `./gradlew :app:asse
 - Q3 wake-split: 2 of ~6 wakes needed >1 window, but RF variance muddies any comparison
   with legacy — not yet actionable.
 
+## Overnight soak 2026-07-02→03: three bugs found, all fixed 2026-07-03
+
+Soak (bench, chart build): supervisor never dead-ended (30 transitions, all recovered),
+but three real bugs surfaced. Loop was silently wedged 03:10–10:22 (restart cleared it).
+
+- **B1 — response-count wrap is mod 255, not mod 256.** Firmware `ble_ips.c` zeroes the
+  counter on REACHING 0xff, so 255 never appears on the wire; RfspySession expected mod
+  256 → false desync + link teardown every ~255 exchanges (7×/night, each self-recovered
+  ~4 s). FIXED in RfspySession + FakeOrangeLink now models the real wrap + regression test.
+  The old wrap test passed because fake and session shared the same wrong model — lesson:
+  fake fidelity beats fake/impl agreement.
+- **B2 — withPump readyTimeout abandoned running commands.** 90 s bound covered execution,
+  not just wait-for-Ready; a slow history read (marginal RF) got abandoned mid-flight,
+  result discarded. FIXED: atomic PENDING→STARTED/ABANDONED lifecycle; a started block
+  always runs to its outcome (maxCommandDuration still bounds it) + test.
+- **B3 — abandoned command wedged the AAPS command queue permanently.** Chain: B2 left
+  task.result null → `historyResult!!` NPE in readPumpHistoryLogic (unlogged) → threw
+  through CommandReadStatus.execute → QueueWorker never resetPerforming() → every later
+  worker run skipped both pickup and disconnect branches and spun silently (no logs, 7 h).
+  KeepAlive READSTATUS "ignored as duplicated" against the stale performing command.
+  FIXED twice over: null-safe history-result handling (medtronic), and QueueWorker now
+  catches a throwing command, logs the stack, cancels it, and resets performing (core
+  implementation module — upstream candidate).
+
 ## Paranoid-review checklist (requested, not yet done)
 
 1. `MedtronicCommunicationManager` — side-by-side diff against

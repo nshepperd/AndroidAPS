@@ -146,6 +146,24 @@ class RfspySessionTest {
         assertThat(session.isOpen).isTrue()
     }
 
+    @Test
+    fun `response count wrap is mod 255 - the value 0xFF never appears (2026-07-03 soak bug)`() = runTest {
+        // Firmware ble_ips.c zeroes the counter on REACHING 0xff: …253 → 254 → 0 → 1…
+        // The 2026-07-02 overnight soak hit a false desync every ~255 exchanges because the
+        // session modelled the wrap as mod 256 (…254 → 255 → 0…). Walk a session across two
+        // full wraps and require zero desyncs.
+        val fake = FakeOrangeLink(backgroundScope)
+        val session = openSession(fake)
+
+        repeat(520) { i ->
+            val result = session.execute(RfspyCommand.GetState, 5.seconds)
+            assertThat(result).isInstanceOf(RfspyResult.Ok::class.java)
+            assertThat(session.isOpen).isTrue()
+            // the wire value must never be 0xFF
+            assertThat(fake.responseCount).isLessThan(0xFF)
+        }
+    }
+
     // -- fault classes (design doc §3) --------------------------------------------------------
 
     @Test
