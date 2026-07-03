@@ -107,7 +107,9 @@ diagnostics, still present in the Eros-shared code). Build: `./gradlew :app:asse
 - New watch items from the drills:
   1. Escalation latency: supervisor held Ready ~13 min (20:25–20:38) while every wake
      failed; notifications fired but reportPumpUnreachable/tune escalation lagged. Check
-     the plugin's escalation threshold vs intent.
+     the plugin's escalation threshold vs intent. **Root cause identified 2026-07-03: see
+     paranoid-review finding R1-a — legacy's 10-min timeout→tune escalation in
+     sendAndListen has no v2 equivalent.**
   2. setFrequency deadline (3 s) tears down the link mid-tune when firmware is busy —
      seen twice (19:55 @916.5, 20:38 @916.55). Self-recovers in seconds but is churn;
      consider a longer register-write deadline or draining radio ops first.
@@ -153,12 +155,34 @@ but three real bugs surfaced. Loop was silently wedged 03:10–10:22 (restart cl
   catches a throwing command, logs the stack, cancels it, and resets performing (core
   implementation module — upstream candidate).
 
-## Paranoid-review checklist (requested, not yet done)
+## Paranoid-review checklist (item 1 DONE 2026-07-03; 2-4 open)
 
-1. `MedtronicCommunicationManager` — side-by-side diff against
-   `git show aa6bcf1920^:pump/medtronic/.../MedtronicCommunicationManager.kt`. Verify each
-   protocol method is behavior-identical (esp. getPumpHistory frame loop, getBasalProfile
-   ACK loop, setCommand retry budget).
+1. ~~`MedtronicCommunicationManager` side-by-side~~ **DONE 2026-07-03** — compared against
+   legacy class + the base-class methods the conversion inlined
+   (`RileyLinkCommunicationManager.wakeUp/sendAndListen`), eyeball + normalized diff.
+   **Protocol logic is verbatim**: history frame loop (incl. quirks: cumulative 6-failure
+   counter, stale-response spin on ACK failure, short-frame append), basal ACK loop
+   (4 attempts vs 3 elsewhere — legacy inconsistency preserved), setCommand budget
+   (4 attempts, retries on timeout AND non-ACK = known I9 class), wakeUp caching (1-min
+   window, PumpModel probe — legacy PowerOn wake was already dead code, cache written even
+   on failed wake), PumpDeviceState transitions, all `!!` sites legacy-identical. pumpType
+   source change in getBasalProfile verified equivalent (verifyConfiguration sets both);
+   `previousConnection` covered by plugin `initPumpStatusData` and is write-only anyway.
+   Three behavioral deltas found, none fixed (Emily to decide):
+   - **R1-a (explains drill watch item 1):** legacy base `sendAndListen` auto-fired
+     WakeAndTuneTask on any command radio-timeout once >10 min since last good comm
+     (`ALLOWED_PUMP_UNREACHABLE`); legacy `isDeviceReachable` had a 15-min variant. v2
+     command timeouts never escalate directly — only `verifyPumpReachable()` (status-refresh
+     path) and initializePump's ≥5-error tune do. This is why the supervisor held Ready
+     ~13 min in the F1 drill. Candidate fix: supervisor counts consecutive PumpSilent
+     command outcomes while Ready → PumpUnreachable + tune.
+   - **R1-b (minor):** `notConnectedCount` semantics drifted: legacy = RFSpy-level
+     (BLE-no-response + radio timeout, reset on any RL ack/radio packet); v2 = pump-level
+     (PumpSilent+Garbled+LinkTrouble, reset only on fully valid reply). Feeds the
+     initializePump ≥5→tune heuristic → slightly more tune-prone in flaky RF (compounds
+     the existing over-tune watch item).
+   - **R1-c (benign improvement):** successful `probeForPumpModel` now pre-caches the
+     1-min wake window (legacy re-burst before the next command).
 2. The I9 note at the top of that file: set-commands retry on radio timeout exactly like
    legacy (same double-delivery exposure class). Tightening = post-soak follow-up, using
    `RfspyResult.Uncertain` which already propagates to `MinimedRadio.LinkTrouble`.
