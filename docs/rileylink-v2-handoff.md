@@ -117,6 +117,18 @@ diagnostics, still present in the Eros-shared code). Build: `./gradlew :app:asse
 - Q3 wake-split: 2 of ~6 wakes needed >1 window, but RF variance muddies any comparison
   with legacy — not yet actionable.
 
+## Drill matrix complete (2026-07-03 afternoon, post-fix build 5c37566760)
+
+- **F2 (OL out of BLE range, via foil wrap)**: PASSED. ~6 min wrapped, 9 connect attempts
+  (30 s timeout each, backoff at 30 s ceiling), connected the moment the foil came off →
+  SessionInit → Ready in 2.7 s, pump exchanges resumed at once. No response-count desync
+  after re-init with OL's preserved counter (B1 fix verified in anger).
+- **Basal profile write**: PASSED — SetBasalProfileSTD via runCommandWithFrames, 2.3 s,
+  read-back matched all 24 h.
+- All fault drills (F1/F2/F3/F8) and all mutating command classes now bench-verified.
+  Still open before wear: overnight re-soak on the fixed build, WakeAndTune re-seat off
+  916.55, F8 hardening, escalation-latency + setFrequency-deadline tweaks, paranoid review.
+
 ## Overnight soak 2026-07-02→03: three bugs found, all fixed 2026-07-03
 
 Soak (bench, chart build): supervisor never dead-ended (30 transitions, all recovered),
