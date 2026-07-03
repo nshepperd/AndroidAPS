@@ -1,7 +1,21 @@
 # Host-side plan: OrangeLink protocol v2 in `pump/rileylink2`
 
 Status: IN PROGRESS (2026-07-03). Phase A landed (MTU, RESPONSE_V2/DIS chars, fake
-interrupt semantics + queueDepth, DIS boot-counter read); B–F pending. Wire contract:
+interrupt semantics + queueDepth, DIS boot-counter read). Phase B landed (V2Codec,
+v2 exchange in RfspySession, Rejected result, MTU fallback, BUSY tripwire, GET_STATISTICS,
+fake -ol1 personality + conformance tests) with two deviations from this plan:
+
+- **Stale-seq notifications are IGNORED, not close-on-violation** (D-list said close).
+  A completion arriving after its command's deadline expired is expected on a live
+  session (the next command's enqueue interrupts the old op → stale `[oldSeq][0xBB]`),
+  and Phase C CANCEL drains need the same tolerance. A completion arriving BEFORE its
+  ack still closes (guaranteed order violated). Genuine reboot evidence on v2 is a link
+  drop, not seq weirdness.
+- **The trailing-0x00 strip landed in Phase B** (V2Codec.envelope, opcodes 4/5), not
+  Phase D — v2-enveloped SEND_AND_LISTEN ships with Phase B, so RF identity had to too.
+  Phase D reduces to the wake strategy.
+
+C–F pending. Wire contract:
 `/home/em/Dev/aps/Orangelink-Firmware/docs/PROTOCOL-V2.md` (as-implemented, firmware
 `subg_rfspy 2.2-ol1`). Companions: `docs/rileylink-v2-design.md` (§14 sketched this work),
 `docs/rileylink-v2-handoff.md` (backlog #4).
@@ -114,6 +128,19 @@ alternative) and cooperative shutdown mid-radio-op.
    parsing deferred until something needs it.
 
 ### Phase C — CANCEL + cooperative cancellation
+
+Constraints locked by the Phase B review:
+- Gate CANCEL on `session.v2Active`, NOT `protocolVariant` — an MTU-fallback session never
+  subscribed RESPONSE_V2, so an enveloped CANCEL would be silently dropped as an unknown
+  stock opcode and the recovery path itself would hang.
+- `classifyV2Completion` currently closes on ANY own-seq `0xBB` (single-flight violated);
+  Phase C must consume the `0xBB` of its own CANCEL before it reaches that classifier.
+- The fake does not model CANCEL yet (bare or enveloped; enveloped currently completes
+  0x22 like any unknown inner opcode) — model BOTH paths from `app_aps.c` incl. the
+  per-path 0xDD ordering (firmware: v2 acks 0xDD from BLE event context first;
+  stock emits 0xDD last through the single data buffer).
+- Candidate refactor while touching the exchange: session-lifetime RESPONSE_V2 collector
+  instead of the per-command collector+channel (efficiency note from review).
 
 1. `RfspyCommand.Cancel` (opcode `0x0F`, `mutating = false`, empty params).
 2. `RfspySession.cancelInFlight()` (v2 sessions only): sends enveloped CANCEL with its

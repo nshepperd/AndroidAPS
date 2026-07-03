@@ -7,6 +7,7 @@ import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
 import app.aaps.pump.rileylink2.rfspy.DeviceInfo
 import app.aaps.pump.rileylink2.rfspy.IncompatibleFirmwareException
+import app.aaps.pump.rileylink2.rfspy.ProtocolVariant
 import app.aaps.pump.rileylink2.rfspy.RfspySession
 import app.aaps.pump.rileylink2.rfspy.SessionConfig
 import kotlinx.coroutines.CancellationException
@@ -69,9 +70,11 @@ class PumpLinkSupervisor(
      *  Enabled by [PumpLinkConfig.batteryPollInterval] > 0. */
     var onBatteryLevel: (Int) -> Unit = {}
 
-    /** Observability hook (§11): DIS build provenance, once per session bring-up when the
-     *  firmware exposes it (boot counter / reset reason — measured reboot evidence). */
-    var onDeviceInfo: (DeviceInfo) -> Unit = {}
+    /** Observability hook (§11): every journal NOTE (non-transition record) as it is
+     *  appended — wire to the logger so notes reach logcat like transitions do. This is
+     *  the single delivery channel for device info, v2 status and fw stats; a typed
+     *  DeviceInfo hook existed briefly and was removed as a redundant parallel channel. */
+    var onNote: (String) -> Unit = {}
 
     private val journal = ArrayDeque<LinkTransition>()
     private val startMark = timeSource.markNow()
@@ -199,10 +202,7 @@ class PumpLinkSupervisor(
                     // DIS first, journaled BEFORE rfspy bring-up: in a firmware reboot loop
                     // every open() fails, and the incrementing boot counter is exactly the
                     // evidence that must survive those failures.
-                    readDeviceInfo(conn)?.let { info ->
-                        journalNote("device $info")
-                        onDeviceInfo(info)
-                    }
+                    readDeviceInfo(conn)?.let { info -> journalNote("device $info") }
                     RfspySession.open(conn, sessionConfig(), epoch, scope)
                 } catch (e: IncompatibleFirmwareException) {
                     setState(PumpLinkState.IncompatibleFirmware(e.version), "version probe")
@@ -216,6 +216,13 @@ class PumpLinkSupervisor(
                     continue
                 }
                 connectAttempt = 0
+                if (session.protocolVariant == ProtocolVariant.V2_OL1) {
+                    journalNote(
+                        if (session.v2Active) "protocol v2 active (mtu=${conn.mtu})"
+                        else "protocol v2 FALLBACK to stock: ${session.v2FallbackReason}"
+                    )
+                    session.bringUpStatisticsHex?.let { journalNote("fw stats $it") }
+                }
                 rssiPoller = launchBleRssiPoller(conn)
                 batteryPoller = launchBatteryPoller(conn)
                 val lost = CompletableDeferred<String>()
@@ -427,11 +434,13 @@ class PumpLinkSupervisor(
             null
         }
 
-    /** Journal-only record: `from == to` marks a note, not a state change. [onTransition]
-     *  is deliberately not invoked (notes must not re-trigger state bridging). */
+    /** Journal record with `from == to` marking a note, not a state change. [onTransition]
+     *  is deliberately not invoked (notes must not re-trigger state bridging); [onNote]
+     *  carries the text to the logger instead. */
     private fun journalNote(cause: String) {
         val current = _state.value
         appendJournal(LinkTransition(startMark.elapsedNow(), current, current, cause))
+        onNote(cause)
     }
 
     private fun appendJournal(entry: LinkTransition) {

@@ -82,6 +82,9 @@ class MinimedRadio(
             is RfspyResult.Interrupted   -> RadioOutcome.LinkTrouble("interrupted (epoch=${result.epoch})")
             is RfspyResult.Uncertain     -> RadioOutcome.LinkTrouble("uncertain: ${result.cause}")
             is RfspyResult.FirmwareError -> RadioOutcome.LinkTrouble("firmware error 0x${result.code.toString(16)}")
+            // v2 immediate NACK: definitively not executed (host/config bug — plan D4);
+            // the I9 tightening to a safe retry is a deliberate later change.
+            is RfspyResult.Rejected      -> RadioOutcome.LinkTrouble("v2 rejected 0x${result.code.toString(16)}")
         }
         onOutcome(outcome)
         return outcome

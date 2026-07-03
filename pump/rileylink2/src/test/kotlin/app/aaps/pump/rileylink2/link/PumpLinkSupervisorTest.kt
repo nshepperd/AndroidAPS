@@ -5,7 +5,6 @@ import app.aaps.pump.rileylink2.fake.RadioReply
 import app.aaps.pump.rileylink2.minimed.MedtronicCrc
 import app.aaps.pump.rileylink2.minimed.Minimed4b6b
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
-import app.aaps.pump.rileylink2.rfspy.DeviceInfo
 import app.aaps.pump.rileylink2.rfspy.FrequencyRegisters
 import app.aaps.pump.rileylink2.rfspy.RadioRegister
 import com.google.common.truth.Truth.assertThat
@@ -81,17 +80,31 @@ class PumpLinkSupervisorTest {
         fake.disFirmwareRevision = "gd5fa522d 2026-06-28"
         fake.disSoftwareRevision = "boot:3 rr:0x2"
         val supervisor = startSupervisor(fake)
-        var reported: DeviceInfo? = null
-        supervisor.onDeviceInfo = { reported = it }
+        val notes = mutableListOf<String>()
+        supervisor.onNote = { notes += it }
 
         supervisor.state.first { it is PumpLinkState.Ready }
 
-        assertThat(reported).isNotNull()
-        assertThat(reported!!.bootCount).isEqualTo(3)
-        assertThat(reported!!.resetReason).isEqualTo(2)              // watchdog
-        val note = supervisor.journalSnapshot().single { it.from == it.to }
+        val note = supervisor.journalSnapshot().single { it.from == it.to && it.cause.startsWith("device") }
         assertThat(note.cause).contains("boot=3")
-        assertThat(note.cause).contains("rr=0x2")
+        assertThat(note.cause).contains("rr=0x2")                    // watchdog, hex like the wire
+        assertThat(notes).contains(note.cause)                       // notes reach the logger hook
+    }
+
+    @Test
+    fun `supervisor runs end-to-end on protocol v2 firmware`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope, versionString = "subg_rfspy 2.2-ol1", queueDepth = 8)
+        fake.pumpOn(916.55)
+        val supervisor = startSupervisor(fake)
+
+        supervisor.state.first { it is PumpLinkState.Ready }
+        val outcome = supervisor.withPump("read model") { radio -> radio.sendAndListen(probe) }
+
+        assertThat(supervisor.journalSnapshot().any { it.cause.startsWith("protocol v2 active") }).isTrue()
+        assertThat(supervisor.journalSnapshot().any { it.cause.startsWith("fw stats") }).isTrue()
+        assertThat(outcome).isInstanceOf(PumpCmdOutcome.Success::class.java)
+        val radioOutcome = (outcome as PumpCmdOutcome.Success).value
+        assertThat((radioOutcome as MinimedRadio.RadioOutcome.Reply).message).isEqualTo(pumpReply)
     }
 
     @Test

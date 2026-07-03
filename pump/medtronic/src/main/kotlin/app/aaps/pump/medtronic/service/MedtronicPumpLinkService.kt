@@ -147,8 +147,8 @@ open class MedtronicPumpLinkService : DaggerService() {
             signalHistory.recordTransition(transition)
             bridgeState(transition.to)
         }
-        newSupervisor.onDeviceInfo = { info ->
-            aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: device $info")
+        newSupervisor.onNote = { note ->
+            aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: $note")
         }
         newSupervisor.onRadioOutcome = signalHistory::recordRadioOutcome
         newSupervisor.onBleRssi = signalHistory::recordBleRssi
