@@ -5,6 +5,7 @@ import app.aaps.pump.rileylink2.fake.RadioReply
 import app.aaps.pump.rileylink2.minimed.MedtronicCrc
 import app.aaps.pump.rileylink2.minimed.Minimed4b6b
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
+import app.aaps.pump.rileylink2.rfspy.DeviceInfo
 import app.aaps.pump.rileylink2.rfspy.FrequencyRegisters
 import app.aaps.pump.rileylink2.rfspy.RadioRegister
 import com.google.common.truth.Truth.assertThat
@@ -71,6 +72,40 @@ class PumpLinkSupervisorTest {
         val ready = supervisor.state.first { it is PumpLinkState.Ready } as PumpLinkState.Ready
         assertThat(ready.frequencyMHz).isEqualTo(916.60)
         assertThat(prefs.lastGoodFrequencyMHz).isEqualTo(916.60)
+    }
+
+    @Test
+    fun `DIS device info is journaled and reported once per session bring-up`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.pumpOn(916.55)
+        fake.disFirmwareRevision = "gd5fa522d 2026-06-28"
+        fake.disSoftwareRevision = "boot:3 rr:0x2"
+        val supervisor = startSupervisor(fake)
+        var reported: DeviceInfo? = null
+        supervisor.onDeviceInfo = { reported = it }
+
+        supervisor.state.first { it is PumpLinkState.Ready }
+
+        assertThat(reported).isNotNull()
+        assertThat(reported!!.bootCount).isEqualTo(3)
+        assertThat(reported!!.resetReason).isEqualTo(2)              // watchdog
+        val note = supervisor.journalSnapshot().single { it.from == it.to }
+        assertThat(note.cause).contains("boot=3")
+        assertThat(note.cause).contains("rr=0x2")
+    }
+
+    @Test
+    fun `DIS boot-counter evidence survives a failed rfspy bring-up`() = runTest {
+        // Reboot-loop diagnosis scenario: the session never opens, but the journal must
+        // still carry the boot counter read before bring-up was attempted.
+        val fake = FakeOrangeLink(backgroundScope, versionString = "subg_rfspy 1.0")
+        fake.disSoftwareRevision = "boot:9 rr:0x2"
+        val supervisor = startSupervisor(fake)
+
+        supervisor.state.first { it is PumpLinkState.IncompatibleFirmware }
+
+        val note = supervisor.journalSnapshot().single { it.from == it.to }
+        assertThat(note.cause).contains("boot=9")
     }
 
     @Test

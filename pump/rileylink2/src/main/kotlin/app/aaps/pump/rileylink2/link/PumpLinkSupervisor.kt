@@ -1,9 +1,11 @@
 package app.aaps.pump.rileylink2.link
 
 import app.aaps.pump.rileylink2.ble.BleConnection
+import app.aaps.pump.rileylink2.ble.BleException
 import app.aaps.pump.rileylink2.ble.BleLink
 import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
+import app.aaps.pump.rileylink2.rfspy.DeviceInfo
 import app.aaps.pump.rileylink2.rfspy.IncompatibleFirmwareException
 import app.aaps.pump.rileylink2.rfspy.RfspySession
 import app.aaps.pump.rileylink2.rfspy.SessionConfig
@@ -66,6 +68,10 @@ class PumpLinkSupervisor(
     /** RileyLink battery percent, polled while linked (first read at session bring-up).
      *  Enabled by [PumpLinkConfig.batteryPollInterval] > 0. */
     var onBatteryLevel: (Int) -> Unit = {}
+
+    /** Observability hook (§11): DIS build provenance, once per session bring-up when the
+     *  firmware exposes it (boot counter / reset reason — measured reboot evidence). */
+    var onDeviceInfo: (DeviceInfo) -> Unit = {}
 
     private val journal = ArrayDeque<LinkTransition>()
     private val startMark = timeSource.markNow()
@@ -190,6 +196,13 @@ class PumpLinkSupervisor(
                 setState(PumpLinkState.SessionInit, "ble operational")
                 epoch++
                 val session = try {
+                    // DIS first, journaled BEFORE rfspy bring-up: in a firmware reboot loop
+                    // every open() fails, and the incrementing boot counter is exactly the
+                    // evidence that must survive those failures.
+                    readDeviceInfo(conn)?.let { info ->
+                        journalNote("device $info")
+                        onDeviceInfo(info)
+                    }
                     RfspySession.open(conn, sessionConfig(), epoch, scope)
                 } catch (e: IncompatibleFirmwareException) {
                     setState(PumpLinkState.IncompatibleFirmware(e.version), "version probe")
@@ -395,20 +408,51 @@ class PumpLinkSupervisor(
         (config.backoffFloor * (1 shl (attempt - 1).coerceAtMost(10)))
             .coerceAtMost(config.backoffCeiling)
 
+    /**
+     * DIS build provenance, read like battery/RSSI at L3 (plain GATT, not rfspy). Only an
+     * ABSENT characteristic (vendor RileyLink, old firmware) is the optional case — any
+     * other BleException means the link itself failed and must abort this bring-up attempt
+     * with an honest cause, not be swallowed.
+     */
+    private suspend fun readDeviceInfo(conn: BleConnection): DeviceInfo? =
+        DeviceInfo.of(
+            firmwareRevision = conn.readDisString(CharId.DIS_FIRMWARE_REVISION),
+            softwareRevision = conn.readDisString(CharId.DIS_SOFTWARE_REVISION),
+        )
+
+    private suspend fun BleConnection.readDisString(char: CharId): String? =
+        try {
+            read(char, DIS_READ_TIMEOUT).toString(Charsets.US_ASCII).takeIf { it.isNotBlank() }
+        } catch (_: BleException.ServiceMismatch) {
+            null
+        }
+
+    /** Journal-only record: `from == to` marks a note, not a state change. [onTransition]
+     *  is deliberately not invoked (notes must not re-trigger state bridging). */
+    private fun journalNote(cause: String) {
+        val current = _state.value
+        appendJournal(LinkTransition(startMark.elapsedNow(), current, current, cause))
+    }
+
+    private fun appendJournal(entry: LinkTransition) {
+        synchronized(journal) {
+            journal.addLast(entry)
+            while (journal.size > config.journalCapacity) journal.removeFirst()
+        }
+    }
+
     private fun setState(new: PumpLinkState, cause: String) {
         val old = _state.value
         if (old == new) return
         _state.value = new
         val transition = LinkTransition(startMark.elapsedNow(), old, new, cause)
-        synchronized(journal) {
-            journal.addLast(transition)
-            while (journal.size > config.journalCapacity) journal.removeFirst()
-        }
+        appendJournal(transition)
         onTransition(transition)
     }
 
     private companion object {
         val BLE_RSSI_READ_TIMEOUT = 5.seconds
+        val DIS_READ_TIMEOUT = 5.seconds
         const val LOW_BATTERY_PERCENT = 20
     }
 

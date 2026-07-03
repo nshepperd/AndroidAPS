@@ -7,9 +7,11 @@ import app.aaps.pump.rileylink2.ble.BleLink
 import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.ble.CloseCause
 import app.aaps.pump.rileylink2.ble.ScanHit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -26,15 +28,24 @@ import kotlin.time.Duration
  * - response-count doorbell + data-characteristic READ-BACK (no data notifications);
  * - stale reads: the data characteristic returns the LAST value when nothing is pending;
  * - malformed frames (length byte != total-1) are dropped silently;
- * - command queue depth 1+processing; overflow drops silently;
+ * - command queue depth [queueDepth]+processing (vendor firmware: 1; -ol1: 8, BOTH paths —
+ *   confirmed by Emily 2026-07-03); overflow drops silently on the stock path;
+ * - a command enqueued while a radio op is in flight INTERRUPTS it: the radio op completes
+ *   0xBB through its own response path, then the new command runs (original subg_rfspy
+ *   behavior, bench-verified on stock OrangeLink 2026-07-03; PROTOCOL-V2.md §stock).
+ *   [RadioReply.Hang] deliberately stays non-interruptible — it models a hard firmware
+ *   wedge (stuck outside the command loop), where only reboot recovers;
  * - ~10 ms command loop latency; SendAndListen consumes its listen timeout on radio silence;
  * - trailing 0x00 stripped from transmitted Minimed radio packets;
+ * - DIS Firmware/Software Revision strings when set (firmware ≥ gd5fa522d); reads of the
+ *   characteristics throw ServiceMismatch when unset, like a real missing characteristic;
  * - reboot(): volatile state loss (count→0, encoding→NONE, preamble→0, frequency→default),
  *   BLE drop with GATT status 8, immediate re-advertising.
  */
 class FakeOrangeLink(
     private val scope: CoroutineScope,
     var versionString: String = "subg_rfspy 2.2",
+    private val queueDepth: Int = 1,
 ) : BleLink {
 
     val address = "F1:47:96:C3:E3:C0"
@@ -57,6 +68,10 @@ class FakeOrangeLink(
     var refuseConnections: Boolean = false
     var connectAttempts: Int = 0
     var bleRssiDbm: Int = -55
+    var negotiatedMtu: Int = 247
+    /** DIS strings; null = characteristic absent (firmware < gd5fa522d / vendor RileyLink). */
+    var disFirmwareRevision: String? = null
+    var disSoftwareRevision: String? = null
 
     private var connection: FakeConnection? = null
 
@@ -99,18 +114,32 @@ class FakeOrangeLink(
         @Volatile var open: Boolean = true
             private set
 
-        // capacity 1 + the one being processed = firmware queue depth 2 ("effectively 1")
-        private val commands = Channel<ByteArray>(capacity = 1)
+        override val mtu: Int get() = negotiatedMtu
+
+        // [queueDepth] + the one being processed (vendor: 1+1 "effectively 1"; -ol1: 8+1)
+        private val commands = Channel<ByteArray>(capacity = queueDepth)
+
+        /** Completed when an enqueue must interrupt the in-flight radio op (→ 0xBB). */
+        @Volatile private var radioOpInterrupt: CompletableDeferred<Unit>? = null
+
         private val worker = scope.launch {
             for (body in commands) {
-                delay(CMD_LOOP_MS)                     // firmware 10 ms command loop
-                val response = executeOnDevice(body)
-                if (!open) break
-                lastDataValue = response               // response is READ back, never pushed
-                // firmware ble_ips.c:457-460 — counter is zeroed on REACHING 0xff, so the
-                // observable sequence is 0…254 → 0 (mod 255; the value 255 never appears)
-                responseCount = (responseCount + 1) % 255
-                _events.emit(BleEvent.NotificationReceived(CharId.RADIO_RESPONSE_COUNT, byteArrayOf(responseCount.toByte())))
+                // Radio ops are interrupt-eligible from the moment they leave the queue: a
+                // command enqueued during the 10 ms command-loop latency must still abort
+                // them (firmware aborts from BLE event context, not from the command loop).
+                if (body.firstOrNull()?.toInt() == 5) radioOpInterrupt = CompletableDeferred()
+                try {
+                    delay(CMD_LOOP_MS)                 // firmware 10 ms command loop
+                    val response = executeOnDevice(body)
+                    if (!open) break
+                    lastDataValue = response           // response is READ back, never pushed
+                    // firmware ble_ips.c:457-460 — counter is zeroed on REACHING 0xff, so the
+                    // observable sequence is 0…254 → 0 (mod 255; the value 255 never appears)
+                    responseCount = (responseCount + 1) % 255
+                    _events.emit(BleEvent.NotificationReceived(CharId.RADIO_RESPONSE_COUNT, byteArrayOf(responseCount.toByte())))
+                } finally {
+                    radioOpInterrupt = null
+                }
             }
         }
 
@@ -129,18 +158,26 @@ class FakeOrangeLink(
                 dropNextCommand = false
                 return
             }
-            // queue overflow: silent drop
-            commands.trySend(bytes.copyOfRange(1, bytes.size))
+            // queue overflow: silent drop. A successful enqueue interrupts an in-flight
+            // radio op (app_aps.c: any new command aborts the current radio operation).
+            if (commands.trySend(bytes.copyOfRange(1, bytes.size)).isSuccess)
+                radioOpInterrupt?.complete(Unit)
         }
 
         override suspend fun read(char: CharId, timeout: Duration): ByteArray {
             if (!open) throw BleException.LinkClosed(CloseCause.LinkLost(8))
             return when (char) {
-                CharId.RADIO_RESPONSE_COUNT -> byteArrayOf(responseCount.toByte())
-                CharId.RADIO_DATA           -> lastDataValue      // stale-read semantics
-                CharId.RADIO_VERSION        -> "ble_rfspy 2.0".toByteArray(Charsets.US_ASCII)
-                CharId.BATTERY_LEVEL        -> byteArrayOf(80)
-                CharId.ORANGE_NOTIFICATION  -> ByteArray(0)
+                CharId.RADIO_RESPONSE_COUNT  -> byteArrayOf(responseCount.toByte())
+                CharId.RADIO_DATA            -> lastDataValue      // stale-read semantics
+                CharId.RADIO_VERSION         -> "ble_rfspy 2.0".toByteArray(Charsets.US_ASCII)
+                CharId.RADIO_RESPONSE_V2     -> // NOTIFY only: a real stack refuses the read
+                    throw BleException.OperationTimeout("read(RADIO_RESPONSE_V2) refused by stack")
+                CharId.BATTERY_LEVEL         -> byteArrayOf(80)
+                CharId.ORANGE_NOTIFICATION   -> ByteArray(0)
+                CharId.DIS_FIRMWARE_REVISION -> disFirmwareRevision?.toByteArray(Charsets.US_ASCII)
+                    ?: throw BleException.ServiceMismatch("characteristic DIS_FIRMWARE_REVISION missing")
+                CharId.DIS_SOFTWARE_REVISION -> disSoftwareRevision?.toByteArray(Charsets.US_ASCII)
+                    ?: throw BleException.ServiceMismatch("characteristic DIS_SOFTWARE_REVISION missing")
             }
         }
 
@@ -183,18 +220,18 @@ class FakeOrangeLink(
                     val tx = RadioTx(packet, repeatCount, delayMs, listenTimeoutMs, retryCount)
                     txLog += tx
                     when (val reply = radioBehavior(tx)) {
-                        is RadioReply.Silence -> {
-                            delay((repeatCount.toLong() * delayMs) + listenTimeoutMs.toLong() * (retryCount + 1))
-                            byteArrayOf(0xAA.toByte())
-                        }
+                        is RadioReply.Silence ->
+                            if (radioOpDelay((repeatCount.toLong() * delayMs) + listenTimeoutMs.toLong() * (retryCount + 1)))
+                                byteArrayOf(0xAA.toByte())
+                            else byteArrayOf(0xBB.toByte())
 
-                        is RadioReply.Packet  -> {
-                            delay(reply.afterMs)
-                            ok(byteArrayOf(reply.rssiRaw.toByte(), reply.packetCount.toByte()) + reply.bytes)
-                        }
+                        is RadioReply.Packet  ->
+                            if (radioOpDelay(reply.afterMs))
+                                ok(byteArrayOf(reply.rssiRaw.toByte(), reply.packetCount.toByte()) + reply.bytes)
+                            else byteArrayOf(0xBB.toByte())
 
                         is RadioReply.Hang    -> {
-                            delay(Long.MAX_VALUE)     // firmware wedged; only reboot recovers
+                            delay(Long.MAX_VALUE)     // hard wedge, NOT interruptible; only reboot recovers
                             byteArrayOf(0xBB.toByte())
                         }
                     }
@@ -218,6 +255,18 @@ class FakeOrangeLink(
                 14   -> ok(ByteArray(18))
                 else -> byteArrayOf(0x22)
             }
+        }
+
+        /**
+         * Wait out a radio-op duration, interruptible by a newly enqueued command
+         * (firmware aborts the in-flight radio operation from BLE event context). The
+         * interrupt deferred was installed by the worker at dequeue time, so an enqueue
+         * during the command-loop latency also lands.
+         * @return true if the full duration elapsed; false if interrupted (caller answers 0xBB).
+         */
+        private suspend fun radioOpDelay(ms: Long): Boolean {
+            val interrupt = checkNotNull(radioOpInterrupt) { "radioOpDelay outside a radio op" }
+            return withTimeoutOrNull(ms) { interrupt.await() } == null
         }
 
         private fun ok(payload: ByteArray): ByteArray = byteArrayOf(0xDD.toByte()) + payload

@@ -215,6 +215,8 @@ but three real bugs surfaced. Loop was silently wedged 03:10–10:22 (restart cl
 3. RL battery polling; journal exposure in the status UI (design §11's remaining half).
 4. Firmware v2 protocol support in L1 (when the firmware agent delivers PROTOCOL-V2.md) +
    FakeOrangeLink second personality + CANCEL-based long-listen wake (Q3 alternative).
+   → IN PROGRESS: PROTOCOL-V2.md delivered; plan + phase status in
+   `docs/rileylink-v2-protocol-v2-plan.md` (branch `emily.protocolv2`).
 5. Delete the now-dead tactical-fix paths from the legacy module IF Eros doesn't want them
    (they do fix real Eros bugs — probably keep; consider upstreaming to nightscout/AndroidAPS).
 6. Consider upstreaming rileylink2 itself once soak-proven.

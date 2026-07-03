@@ -225,6 +225,41 @@ class RfspySession private constructor(
     }
 }
 
+/**
+ * DIS build provenance (design §2 correction), exposed by firmware ≥ gd5fa522d and read by
+ * the supervisor at L3 (like battery/RSSI — it is plain GATT, not rfspy protocol).
+ * [softwareRevision] format: `boot:<n> rr:0x<resetreas>` — boot counter resets on power
+ * loss; rr bits: 0x1 pin, 0x2 watchdog, 0x4 soft reset incl. DFU, 0x8 lockup.
+ */
+data class DeviceInfo(val firmwareRevision: String?, val softwareRevision: String?) {
+
+    val bootCount: Int?
+    val resetReason: Int?
+
+    init {
+        val match = softwareRevision?.let { SW_REGEX.find(it) }
+        bootCount = match?.groupValues?.get(1)?.toIntOrNull()
+        resetReason = match?.groupValues?.get(2)?.toIntOrNull(16)
+    }
+
+    /** The one canonical rendering — journal and logcat must stay grep-compatible. */
+    override fun toString(): String {
+        val sw = if (bootCount != null) "boot=$bootCount rr=0x${(resetReason ?: 0).toString(16)}"
+        else "sw='${softwareRevision ?: "?"}'"
+        return "fw='${firmwareRevision ?: "?"}' $sw"
+    }
+
+    companion object {
+
+        private val SW_REGEX = Regex("""boot:(\d+) rr:0x([0-9a-fA-F]+)""")
+
+        /** null when the device exposes neither string (vendor RileyLink, old firmware). */
+        fun of(firmwareRevision: String?, softwareRevision: String?): DeviceInfo? =
+            if (firmwareRevision == null && softwareRevision == null) null
+            else DeviceInfo(firmwareRevision, softwareRevision)
+    }
+}
+
 enum class ProtocolVariant { STOCK, V2_OL1 }
 
 data class SessionConfig(

@@ -102,10 +102,18 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
 
     private var gatt: BluetoothGatt? = null
     @Volatile private var closed = false
+    @Volatile private var negotiatedMtu = DEFAULT_MTU
+
+    override val mtu: Int get() = negotiatedMtu
 
     /** One outstanding GATT operation (Android requirement); ops carry deadlines. */
     private val opMutex = Mutex()
     @Volatile private var pendingOp: CompletableDeferred<OpResult>? = null
+
+    /** MTU negotiation is tracked separately from [pendingOp]: onMtuChanged is the one GATT
+     *  callback that can fire UNSOLICITED (peer/stack-initiated exchange, co-resident GATT
+     *  client), so it must never be allowed to complete an unrelated in-flight operation. */
+    @Volatile private var pendingMtu: CompletableDeferred<Unit>? = null
 
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Unit>()
@@ -153,6 +161,11 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
             pendingOp?.complete(OpResult(status, null, rssi))
         }
 
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) negotiatedMtu = mtu
+            pendingMtu?.complete(Unit)      // NEVER pendingOp — see pendingMtu declaration
+        }
+
         @Deprecated("pre-33 callback")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
@@ -163,7 +176,7 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
         }
     }
 
-    /** Atomic bring-up (§5): connected → services → RileyLink verified → subscribed. */
+    /** Atomic bring-up (§5): connected → services → RileyLink verified → MTU → subscribed. */
     suspend fun bringUp(gatt: BluetoothGatt) {
         this.gatt = gatt
         connected.await()
@@ -171,8 +184,34 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
         servicesDiscovered.await()
         gatt.getService(GattUuids.RADIO_SERVICE)
             ?: throw BleException.ServiceMismatch("radio service missing — not a RileyLink-compatible device")
+        requestMtu()
         subscribeInternal(GattUuids.CHARA_RADIO_RESPONSE_COUNT)
-        log("LINKV2: bring-up complete for ${gatt.device.address}")
+        log("LINKV2: bring-up complete for ${gatt.device.address}, mtu=$negotiatedMtu")
+    }
+
+    /**
+     * Fully non-fatal, whatever goes wrong: the stock protocol works at MTU 23 (L1 falls
+     * back to it when [mtu] < 131), and some stacks accept requestMtu() but never deliver
+     * onMtuChanged (e.g. MTU already negotiated on the shared ACL link) — that must not
+     * kill a connection that works. Deliberately NOT routed through [executeOp]: its
+     * deadline-expiry path closes the link, and the callback must not touch [pendingOp].
+     */
+    private suspend fun requestMtu() {
+        val changed = CompletableDeferred<Unit>()
+        opMutex.withLock {
+            if (closed) return
+            pendingMtu = changed
+            try {
+                if (!requireGatt().requestMtu(REQUESTED_MTU)) {
+                    log("LINKV2: requestMtu refused by stack; staying at mtu=$negotiatedMtu")
+                    return
+                }
+                if (withTimeoutOrNull(MTU_TIMEOUT) { changed.await() } == null)
+                    log("LINKV2: no onMtuChanged within $MTU_TIMEOUT; staying at mtu=$negotiatedMtu")
+            } finally {
+                pendingMtu = null
+            }
+        }
     }
 
     override suspend fun write(char: CharId, bytes: ByteArray, timeout: Duration) {
@@ -252,6 +291,7 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
             gatt = null
             _events.tryEmit(BleEvent.Closed(cause))
             pendingOp?.completeExceptionally(BleException.LinkClosed(cause))
+            pendingMtu?.complete(Unit)      // unblock a waiting requestMtu; it is non-fatal anyway
             if (!connected.isCompleted) connected.completeExceptionally(BleException.LinkClosed(cause))
             if (!servicesDiscovered.isCompleted) servicesDiscovered.completeExceptionally(BleException.LinkClosed(cause))
         }
@@ -278,5 +318,12 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
 
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private val SUBSCRIBE_TIMEOUT = 5.seconds
+        private val MTU_TIMEOUT = 5.seconds
+
+        private const val DEFAULT_MTU = 23
+
+        /** Firmware SoftDevice is configured for 247 (PROTOCOL-V2.md deviation 1); v2 needs
+         *  ≥ 131. Android 14+ coerces the first request to 517 — also fine. */
+        private const val REQUESTED_MTU = 247
     }
 }

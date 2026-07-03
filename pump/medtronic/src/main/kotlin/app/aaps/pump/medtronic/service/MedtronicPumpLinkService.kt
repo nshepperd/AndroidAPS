@@ -147,6 +147,9 @@ open class MedtronicPumpLinkService : DaggerService() {
             signalHistory.recordTransition(transition)
             bridgeState(transition.to)
         }
+        newSupervisor.onDeviceInfo = { info ->
+            aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: device $info")
+        }
         newSupervisor.onRadioOutcome = signalHistory::recordRadioOutcome
         newSupervisor.onBleRssi = signalHistory::recordBleRssi
         newSupervisor.onBatteryLevel = { percent -> rileyLinkServiceData.batteryLevel = percent }

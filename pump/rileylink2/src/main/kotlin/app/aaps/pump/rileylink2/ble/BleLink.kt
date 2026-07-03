@@ -39,6 +39,10 @@ interface BleConnection {
     /** Hot stream of link events. Replays nothing; subscribe before first use. */
     val events: SharedFlow<BleEvent>
 
+    /** Negotiated ATT MTU. 23 (the BLE default) when negotiation failed or never ran;
+     *  protocol v2 requires ≥ 131 (PROTOCOL-V2.md) — L1 checks this at opt-in. */
+    val mtu: Int
+
     suspend fun write(char: CharId, bytes: ByteArray, timeout: Duration)
 
     suspend fun read(char: CharId, timeout: Duration): ByteArray
@@ -57,8 +61,17 @@ enum class CharId {
     RADIO_DATA,
     RADIO_RESPONSE_COUNT,
     RADIO_VERSION,
+
+    /** Protocol v2 acks/completions (NOTIFY only; PROTOCOL-V2.md). Absent on vendor firmware. */
+    RADIO_RESPONSE_V2,
     BATTERY_LEVEL,
     ORANGE_NOTIFICATION,
+
+    /** DIS 0x2A26, `g<commit>[-dirty] <date>`. Absent on firmware < gd5fa522d. */
+    DIS_FIRMWARE_REVISION,
+
+    /** DIS 0x2A28, `boot:<n> rr:0x<resetreas>`. Absent on firmware < gd5fa522d. */
+    DIS_SOFTWARE_REVISION,
 }
 
 sealed interface BleEvent {

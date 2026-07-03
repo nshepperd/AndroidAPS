@@ -1,6 +1,7 @@
 # Host-side plan: OrangeLink protocol v2 in `pump/rileylink2`
 
-Status: PLAN (2026-07-03, pre-implementation). Wire contract:
+Status: IN PROGRESS (2026-07-03). Phase A landed (MTU, RESPONSE_V2/DIS chars, fake
+interrupt semantics + queueDepth, DIS boot-counter read); B–F pending. Wire contract:
 `/home/em/Dev/aps/Orangelink-Firmware/docs/PROTOCOL-V2.md` (as-implemented, firmware
 `subg_rfspy 2.2-ol1`). Companions: `docs/rileylink-v2-design.md` (§14 sketched this work),
 `docs/rileylink-v2-handoff.md` (backlog #4).

@@ -1,11 +1,13 @@
 package app.aaps.pump.rileylink2.rfspy
 
+import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.fake.FakeOrangeLink
 import app.aaps.pump.rileylink2.fake.RadioReply
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import kotlin.test.assertFailsWith
@@ -243,6 +245,112 @@ class RfspySessionTest {
         assertFailsWith<SessionClosedException> {
             session.execute(RfspyCommand.GetState, 5.seconds)
         }
+    }
+
+    // -- firmware queue + interrupt semantics (PROTOCOL-V2.md §stock, bench 2026-07-03) ------
+
+    @Test
+    fun `command enqueued during in-flight radio op interrupts it - 0xBB closes the session (R2)`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        val conn = fake.connect(fake.address, 5.seconds)
+        val session = RfspySession.open(conn, config(), epoch = 1, scope = backgroundScope)
+
+        val pending = async { session.execute(sendAndListen(byteArrayOf(0x01), timeoutMs = 30_000), 60.seconds) }
+        advanceTimeBy(1.seconds)
+        // A rogue write bypassing the session's single-flight mutex (another client, or a host
+        // bug): the firmware aborts the in-flight listen, which completes 0xBB.
+        conn.write(CharId.RADIO_DATA, RfspySession.frame(RfspyCommand.GetState.body), 2.seconds)
+
+        val result = pending.await()
+        assertThat(result).isInstanceOf(RfspyResult.Interrupted::class.java)
+        assertThat(session.isOpen).isFalse()
+    }
+
+    @Test
+    fun `RadioReply Hang models a hard wedge - NOT interruptible by another command`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.radioBehavior = { RadioReply.Hang }
+        val conn = fake.connect(fake.address, 5.seconds)
+        val session = RfspySession.open(conn, config(), epoch = 1, scope = backgroundScope)
+
+        val pending = async { session.execute(sendAndListen(byteArrayOf(0x01)), 20.seconds) }
+        advanceTimeBy(1.seconds)
+        conn.write(CharId.RADIO_DATA, RfspySession.frame(RfspyCommand.GetState.body), 2.seconds)
+
+        // No 0xBB: the wedge holds until the session's own deadline gives up.
+        val result = pending.await()
+        assertThat(result).isInstanceOf(RfspyResult.Uncertain::class.java)
+    }
+
+    @Test
+    fun `queue depth 1 (vendor) drops overflow silently where depth 8 (-ol1) absorbs it`() = runTest {
+        suspend fun completedResponses(depth: Int): Int {
+            val fake = FakeOrangeLink(backgroundScope, queueDepth = depth)
+            val conn = fake.connect(fake.address, 5.seconds)
+            val frame = RfspySession.frame(RfspyCommand.GetState.body)
+            repeat(5) {
+                conn.write(CharId.RADIO_DATA, frame, 2.seconds)
+                runCurrent()          // let the 10 ms command loop pick up work between writes
+            }
+            advanceTimeBy(5.seconds)
+            val count = fake.responseCount
+            conn.close()
+            return count
+        }
+
+        // Depth 1: one processing + one queued; the other three vanish without a trace.
+        assertThat(completedResponses(1)).isEqualTo(2)
+        // Depth 8 (-ol1, both paths — resolved Q-a): all five complete.
+        assertThat(completedResponses(8)).isEqualTo(5)
+    }
+
+    @Test
+    fun `interrupt lands even during the 10 ms command-loop window`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        val conn = fake.connect(fake.address, 5.seconds)
+        val session = RfspySession.open(conn, config(), epoch = 1, scope = backgroundScope)
+
+        val pending = async { session.execute(sendAndListen(byteArrayOf(0x01), timeoutMs = 30_000), 60.seconds) }
+        runCurrent()   // S&L dequeued; command-loop latency running, listen not yet started
+        conn.write(CharId.RADIO_DATA, RfspySession.frame(RfspyCommand.GetState.body), 2.seconds)
+
+        assertThat(pending.await()).isInstanceOf(RfspyResult.Interrupted::class.java)
+    }
+
+    // -- Phase A groundwork: MTU + DIS build provenance ----------------------------------------
+
+    @Test
+    fun `negotiated MTU is exposed on the connection`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.negotiatedMtu = 185
+
+        val conn = fake.connect(fake.address, 5.seconds)
+
+        assertThat(conn.mtu).isEqualTo(185)
+    }
+
+    @Test
+    fun `DeviceInfo parses the DIS software revision string`() {
+        val info = DeviceInfo(firmwareRevision = "gd5fa522d 2026-06-28", softwareRevision = "boot:17 rr:0xa")
+
+        assertThat(info.bootCount).isEqualTo(17)
+        assertThat(info.resetReason).isEqualTo(0xA)                  // watchdog + lockup
+        assertThat(info.toString()).contains("boot=17")
+        assertThat(info.toString()).contains("rr=0xa")               // hex, matching the wire format
+    }
+
+    @Test
+    fun `DeviceInfo keeps the raw string visible when parsing fails`() {
+        val info = DeviceInfo(firmwareRevision = null, softwareRevision = "bootloop???")
+
+        assertThat(info.bootCount).isNull()
+        assertThat(info.toString()).contains("bootloop???")          // evidence is never dropped
+    }
+
+    @Test
+    fun `DeviceInfo of() collapses a fully absent DIS to null`() {
+        assertThat(DeviceInfo.of(null, null)).isNull()
+        assertThat(DeviceInfo.of("g123 2026-01-01", null)).isNotNull()
     }
 
     @Test
