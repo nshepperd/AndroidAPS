@@ -220,3 +220,31 @@ but three real bugs surfaced. Loop was silently wedged 03:10–10:22 (restart cl
 5. Delete the now-dead tactical-fix paths from the legacy module IF Eros doesn't want them
    (they do fix real Eros bugs — probably keep; consider upstreaming to nightscout/AndroidAPS).
 6. Consider upstreaming rileylink2 itself once soak-proven.
+
+## Protocol v2 — first live day (flashed 2026-07-03 21:46, reviewed 2026-07-04 20:52)
+
+Build: app @ `1437b7e780` (phase B), firmware `gdac54824 2026-07-03` (`2.2-ol1`).
+
+- **Link plane: flawless.** ONE BLE connection and ONE v2 session for the entire ~23 h.
+  Zero LinkDown, zero session teardowns, zero desync, zero v2 protocol events (no
+  Rejected/BUSY/violation), zero Uncertain. Bring-up markers all correct:
+  `mtu=247`, `device fw='gdac54824 2026-07-03' boot=1 rr=0x4` (DFU reset — as expected
+  post-flash), `protocol v2 active (mtu=247)`, `fw stats 0138…` journaled.
+- **RF plane: six pump-unreachable episodes** (03:17–03:54, 08:58–09:04, 09:23 (4 s),
+  12:52–13:05, 18:07–18:44, 19:52–20:35; ~2.2 h total). Every one recovered UNAIDED via
+  the ladder (F1 behavior confirmed live); tune cooldown held its 3-min cadence (no
+  over-tune). 8 command failures all clustered at episode onsets; 143 TBR/bolus
+  successes otherwise; loop healthy after each recovery. Frequency drifted
+  916.55 → 916.50 → 916.65 across the day.
+- **WATCH ITEM / probable finding — tune never wakes the pump.** `MinimedRadio.tune`
+  sends the GetModel probe with repeatCount=0 and 1.25 s listens; during PumpUnreachable
+  no withPump command runs, so nothing ever sends a 200-repeat wake burst. If the pump is
+  in range but its receiver is duty-cycling, recovery relies on a bare probe landing in a
+  sniff slot — which plausibly explains 35–45 min recoveries (legacy WakeAndTuneTask did
+  wakeUp() BEFORE scanning). Behavioral fix (NOT applied — Emily to approve): supervisor
+  tune path wakes first (`radio.wake` at last-good frequency, then scan), or first trial
+  per frequency uses a wake-style burst. Interacts with Q3/Phase D wake strategy.
+- Minor fake-fidelity nit: real GET_STATISTICS payload is 20 bytes; FakeOrangeLink
+  models 18 (`ok(ByteArray(18))`). Align when next touching the fake.
+- Background noise: ~815 `getPumpHistory` frame-ACK retry errors spread evenly over all
+  hours — legacy-typical, self-healing within the frame retry budget.
