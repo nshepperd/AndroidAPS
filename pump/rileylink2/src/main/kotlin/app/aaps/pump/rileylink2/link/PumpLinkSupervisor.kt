@@ -22,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
@@ -92,6 +94,11 @@ class PumpLinkSupervisor(
     /** One-shot demand from requestTune/reportPumpUnreachable — acts even with no lease held. */
     private val userAction = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /** Phone Bluetooth adapter state, fed by the integration layer (F8 hardening): while
+     *  false the live link is dropped and reconnects park instead of burning blind 30 s
+     *  connect attempts against a restarting BT stack. */
+    private val adapterUp = MutableStateFlow(true)
+
     private enum class Control { TUNE_REQUESTED, PUMP_UNREACHABLE_REPORTED }
 
     fun start() {
@@ -135,6 +142,12 @@ class PumpLinkSupervisor(
         userAction.set(true)
         controls.trySend(Control.PUMP_UNREACHABLE_REPORTED)
         demandSignals.trySend(Unit)
+    }
+
+    /** Adapter on/off from the platform's ACTION_STATE_CHANGED receiver. Off: the live
+     *  connection is closed (distinct cause) and the reconnect loop parks until on. */
+    fun setAdapterUp(up: Boolean) {
+        adapterUp.value = up
     }
 
     fun journalSnapshot(): List<LinkTransition> = synchronized(journal) { journal.toList() }
@@ -182,8 +195,24 @@ class PumpLinkSupervisor(
         }
         var connectAttempt = 0
         while (true) {
+            if (!adapterUp.value) {
+                // F8 hardening: don't burn blind connect attempts against a BT stack that is
+                // off or restarting — park until the platform reports STATE_ON.
+                setState(PumpLinkState.LinkDown("bluetooth adapter off"), "adapter off")
+                adapterUp.first { it }
+                connectAttempt = 0
+            }
             setState(PumpLinkState.BleConnecting(connectAttempt), if (connectAttempt == 0) "connect" else "reconnect")
             val conn = try {
+                if (connectAttempt >= config.scanBeforeConnectAfter) {
+                    // Directed connects fail silently when the stack's LE cache is cold
+                    // (random static address after a phone reboot, 2026-07-10 incident); a
+                    // filtered scan sighting repopulates the cache and proves the device is
+                    // actually there before the next 30 s directed attempt.
+                    val hit = bleLink.scan(config.deviceAddress, config.scanSightingTimeout).firstOrNull()
+                        ?: throw BleException.ConnectFailed(null, "not sighted by scan within ${config.scanSightingTimeout}")
+                    journalNote("scan sighted ${hit.name ?: hit.address} rssi=${hit.rssi}")
+                }
                 bleLink.connect(config.deviceAddress, config.connectTimeout)
             } catch (e: CancellationException) {
                 throw e
@@ -195,6 +224,12 @@ class PumpLinkSupervisor(
             }
             var rssiPoller: Job? = null
             var batteryPoller: Job? = null
+            // Adapter-off during a live link: close it proactively (a dying stack may never
+            // deliver the disconnect callback) — the loop top then parks until STATE_ON.
+            val adapterWatcher = scope.launch {
+                adapterUp.first { !it }
+                runCatching { conn.close() }
+            }
             try {
                 setState(PumpLinkState.SessionInit, "ble operational")
                 epoch++
@@ -232,6 +267,7 @@ class PumpLinkSupervisor(
             } finally {
                 rssiPoller?.cancel()
                 batteryPoller?.cancel()
+                adapterWatcher.cancel()
                 withContext(NonCancellable) { runCatching { conn.close() } }
             }
         }

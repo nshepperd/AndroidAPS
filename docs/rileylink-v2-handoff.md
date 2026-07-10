@@ -248,3 +248,30 @@ Build: app @ `1437b7e780` (phase B), firmware `gdac54824 2026-07-03` (`2.2-ol1`)
   models 18 (`ok(ByteArray(18))`). Align when next touching the fake.
 - Background noise: ~815 `getPumpHistory` frame-ACK retry errors spread evenly over all
   hours — legacy-typical, self-healing within the frame retry budget.
+
+## Cold-LE-cache incident (2026-07-10) + F8/F9 hardening (DONE, same day)
+
+Incident: phone battery died 07:30, rebooted 12:29; the supervisor then burned 6 h of
+silent 30 s "bring-up timed out" connect attempts (occasional GATT 147) against an
+OrangePro that was advertising fine (laptop scan confirmed). Root cause: directed
+`connectGatt` resolves the LE address TYPE from the stack's device cache — empty after
+reboot, defaulting to PUBLIC — and the OrangePro's `C3:…` random static address ignores
+public-addressed connect requests forever. Manual fix that confirmed it: one scan in the
+RileyLink BLE config dialog → next attempt connected instantly.
+
+Hardening shipped (all four items, minSdk 31→33 for `getRemoteLeDevice`):
+
+- `AndroidBleLink.connect`: explicit `TRANSPORT_LE` (F8 item b), and
+  `getRemoteLeDevice(addr, ADDRESS_TYPE_RANDOM)` when the MSB proves the address can't be
+  an IEEE OUI (top bits 11 + multicast/local bits) — deterministic cache-cold fix for
+  OrangePro/OrangeLink-class devices; ambiguous addresses stay on stack resolution.
+- Supervisor scan-before-connect fallback: from connect attempt ≥ 2
+  (`scanBeforeConnectAfter`), a filtered sighting scan (25 s) must hit before the directed
+  connect — repopulates the cache for ANY address type and journals
+  `scan sighted <name> rssi=<n>`; no sighting counts as a failed attempt (backoff as usual).
+- F8 item a: `MedtronicPumpLinkService` registers `BluetoothAdapter.ACTION_STATE_CHANGED`
+  → `supervisor.setAdapterUp()`; adapter-off proactively closes the live link and the
+  reconnect loop parks in `LinkDown("bluetooth adapter off")` until STATE_ON (no blind
+  attempts against a restarting stack); initial state seeded at supervisor start.
+- Tests: F9 scan-fallback + F8 adapter-gate scenario tests; FakeOrangeLink got
+  `advertising`/`scanCalls` (scan waits out its timeout when not advertising).

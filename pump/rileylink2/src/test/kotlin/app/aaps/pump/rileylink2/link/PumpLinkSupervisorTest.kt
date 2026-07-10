@@ -279,6 +279,44 @@ class PumpLinkSupervisorTest {
         assertThat(state).isInstanceOf(PumpLinkState.Ready::class.java)
     }
 
+    @Test
+    fun `F9 - repeated connect failures engage the sighting scan and recovery is journaled`() = runTest {
+        // Cold-LE-cache incident (2026-07-10): directed connects fail silently forever after
+        // a phone reboot; the fallback scan is both the cache repair and the presence proof.
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.pumpOn(916.55)
+        fake.refuseConnections = true
+        val supervisor = startSupervisor(fake)
+
+        supervisor.state.first { it is PumpLinkState.LinkDown }
+        advanceTimeBy(5.minutes)
+        assertThat(fake.scanCalls).isAtLeast(1)               // fallback engaged after the direct attempts
+
+        fake.refuseConnections = false
+        supervisor.state.first { it is PumpLinkState.Ready }
+        assertThat(supervisor.journalSnapshot().any { it.from == it.to && it.cause.startsWith("scan sighted") }).isTrue()
+    }
+
+    @Test
+    fun `F8 - adapter off drops the link and parks reconnect until adapter on`() = runTest {
+        val fake = FakeOrangeLink(backgroundScope)
+        fake.pumpOn(916.55)
+        val supervisor = startSupervisor(fake)
+        supervisor.state.first { it is PumpLinkState.Ready }
+
+        supervisor.setAdapterUp(false)
+        supervisor.state.first { it is PumpLinkState.LinkDown && it.cause == "bluetooth adapter off" }
+        val attemptsWhileOff = fake.connectAttempts
+        val scansWhileOff = fake.scanCalls
+        advanceTimeBy(10.minutes)
+        assertThat(fake.connectAttempts).isEqualTo(attemptsWhileOff)   // parked, not burning blind attempts
+        assertThat(fake.scanCalls).isEqualTo(scansWhileOff)
+
+        supervisor.setAdapterUp(true)
+        val state = supervisor.state.first { it is PumpLinkState.Ready }
+        assertThat(state).isInstanceOf(PumpLinkState.Ready::class.java)
+    }
+
     // -- rate limiting (§8.3) ---------------------------------------------------------------------
 
     @Test

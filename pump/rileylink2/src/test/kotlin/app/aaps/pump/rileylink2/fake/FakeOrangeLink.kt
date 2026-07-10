@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import java.nio.ByteBuffer
 import kotlin.time.Duration
@@ -88,6 +88,10 @@ class FakeOrangeLink(
     var dropAllCommands: Boolean = false
     var refuseConnections: Boolean = false
     var connectAttempts: Int = 0
+    /** Whether the device is advertising: a sighting scan hits immediately when true, and
+     *  waits out its full timeout with no hit when false (real scanner semantics). */
+    var advertising: Boolean = true
+    var scanCalls: Int = 0
     var bleRssiDbm: Int = -55
     var negotiatedMtu: Int = 247
     /** DIS strings; null = characteristic absent (firmware < gd5fa522d / vendor RileyLink). */
@@ -98,8 +102,11 @@ class FakeOrangeLink(
 
     private var connection: FakeConnection? = null
 
-    override fun scan(filterAddress: String?, timeout: Duration): Flow<ScanHit> =
-        flowOf(ScanHit(address, "OrangeLink", rssi = -60))
+    override fun scan(filterAddress: String?, timeout: Duration): Flow<ScanHit> = flow {
+        scanCalls++
+        if (advertising) emit(ScanHit(address, "OrangeLink", rssi = -60))
+        else delay(timeout)
+    }
 
     override suspend fun connect(address: String, timeout: Duration): BleConnection {
         connectAttempts++
