@@ -244,6 +244,11 @@ Build: app @ `1437b7e780` (phase B), firmware `gdac54824 2026-07-03` (`2.2-ol1`)
   wakeUp() BEFORE scanning). Behavioral fix (NOT applied — Emily to approve): supervisor
   tune path wakes first (`radio.wake` at last-good frequency, then scan), or first trial
   per frequency uses a wake-style burst. Interacts with Q3/Phase D wake strategy.
+  **DONE 2026-07-12 (Emily approved, `925be91671`)**: `tune()` wakes at last-good (or
+  session-default first scan) frequency before the quick path/sweep; silent wake is not a
+  verdict. Regression test models the duty-cycled pump (answers bursts only). Trigger:
+  marginal-RF night (successes −83…−99, garbles −103/−107), two unreachable episodes,
+  the first taking 18 min of bare-probe tunes to recover.
 - Minor fake-fidelity nit: real GET_STATISTICS payload is 20 bytes; FakeOrangeLink
   models 18 (`ok(ByteArray(18))`). Align when next touching the fake.
 - Background noise: ~815 `getPumpHistory` frame-ACK retry errors spread evenly over all
