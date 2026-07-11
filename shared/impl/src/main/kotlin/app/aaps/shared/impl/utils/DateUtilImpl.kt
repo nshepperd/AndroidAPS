@@ -235,7 +235,10 @@ class DateUtilImpl @Inject constructor(
 
     override fun hourAgo(time: Long, rh: ResourceHelper): String {
         val duration = (now() - time).milliseconds
-        val hours = duration.inWholeHours
+        // R.string.hoursago is "%1$.1fh ago": the arg must be floating-point, and the old
+        // implementation passed fractional hours — inWholeHours (Long) made every call
+        // throw IllegalFormatConversionException inside Resources.getString.
+        val hours = duration.toDouble(DurationUnit.HOURS)
         return rh.gs(R.string.hoursago, hours)
     }
 

@@ -526,6 +526,24 @@ class DateUtilImplTest {
         assertThat(newResult).isEqualTo(expected)
     }
     @Test
+    fun `hourAgo arg formats with the real hoursago pattern`() {
+        // ARRANGE
+        // The production resource is "%1$.1fh ago": a Long arg throws
+        // IllegalFormatConversionException inside Resources.getString (regression seen as
+        // once-a-second exception spam on the Medtronic fragment, 2026-07-12).
+        // FakeResourceHelper coerces the arg type, so this test formats with the real pattern.
+        val realPatternRh = object : app.aaps.core.interfaces.resources.ResourceHelper by FakeResourceHelper() {
+            override fun gs(id: Int, vararg args: Any?): String = String.format("%1\$.1fh ago", *args)
+        }
+        val threeAndAHalfHoursAgo = fixedInstant.minus(210, java.time.temporal.ChronoUnit.MINUTES).toEpochMilli()
+
+        // ACT
+        val newResult = dateUtilImplDeter.hourAgo(threeAndAHalfHoursAgo, realPatternRh)
+
+        // ASSERT
+        assertThat(newResult).isEqualTo("3.5h ago")
+    }
+    @Test
     fun `dayAgo works and matches old behavior`() {
         // ARRANGE
         val rh = FakeResourceHelper()
