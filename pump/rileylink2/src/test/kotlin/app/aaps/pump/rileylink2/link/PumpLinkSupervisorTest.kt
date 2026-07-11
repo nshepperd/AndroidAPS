@@ -331,8 +331,9 @@ class PumpLinkSupervisorTest {
         advanceTimeBy(10.minutes)
         pending.cancel()
 
-        // full scan = 8 frequencies x 3 trials; with a 3-min cooldown ~4-5 scans fit in ~10 min
-        val scans = fake.txLog.size / (MinimedRadio.US_FREQUENCIES.size * MinimedRadio.TUNE_TRIALS)
+        // full scan = 8 frequencies x 3 bare trials (wake bursts excluded by repeatCount);
+        // with a 3-min cooldown ~4-5 scans fit in ~10 min
+        val scans = fake.txLog.count { it.repeatCount == 0 } / (MinimedRadio.US_FREQUENCIES.size * MinimedRadio.TUNE_TRIALS)
         assertThat(scans).isAtLeast(2)
         assertThat(scans).isAtMost(5)
     }

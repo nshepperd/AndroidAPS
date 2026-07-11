@@ -135,19 +135,30 @@ class MinimedRadio(
     }
 
     /**
-     * Find the pump's frequency. Quick path first: if [currentFrequencyMHz] still answers,
-     * keep it without a full scan. Full scan mirrors the legacy RSSI-ranked algorithm
-     * (3 trials per frequency, −99 dBm penalty per miss), but aborts after
-     * [MAX_CONSECUTIVE_LINK_FAILURES] session-level failures — those are link problems that
-     * more frequencies cannot fix (the 2026-07-02 zombie-tune lesson).
+     * Find the pump's frequency. Wake burst first (2026-07-04 live-day finding: during
+     * PumpUnreachable nothing else ever wakes the pump, and a duty-cycling receiver rarely
+     * catches a bare 0-repeat probe — legacy WakeAndTuneTask woke BEFORE scanning; an
+     * awake pump then answers probes for ~1 min). Then quick path: if
+     * [currentFrequencyMHz] still answers, keep it without a full scan. Full scan mirrors
+     * the legacy RSSI-ranked algorithm (3 trials per frequency, −99 dBm penalty per miss),
+     * but aborts after [MAX_CONSECUTIVE_LINK_FAILURES] session-level failures — those are
+     * link problems that more frequencies cannot fix (the 2026-07-02 zombie-tune lesson).
      */
     suspend fun tune(
         probeMessage: ByteArray,
         frequenciesMHz: List<Double>,
         currentFrequencyMHz: Double? = null,
     ): TuneOutcome {
+        // Wake at the last-good frequency when known, else the session-default first scan
+        // frequency (matches SessionConfig's cold-start choice). A silent wake is not a
+        // verdict — the scan below still runs, exactly as before.
+        val wakeFrequencyMHz = currentFrequencyMHz ?: frequenciesMHz.first()
+        if (!setFrequency(wakeFrequencyMHz)) return TuneOutcome.LinkTrouble("setFrequency(wake) failed")
+        if (wake(probeMessage) is RadioOutcome.LinkTrouble)
+            return TuneOutcome.LinkTrouble("link trouble during wake")
+
         if (currentFrequencyMHz != null) {
-            if (!setFrequency(currentFrequencyMHz)) return TuneOutcome.LinkTrouble("setFrequency failed")
+            // Radio is already on currentFrequencyMHz from the wake above.
             val trial = runTrials(probeMessage)
             when (trial) {
                 is Trial.LinkTrouble -> return TuneOutcome.LinkTrouble(trial.detail)
