@@ -34,6 +34,15 @@ sealed interface RfspyResult {
      * commands the caller MUST treat pump state as unknown (design invariant I9).
      */
     data class Uncertain(val cause: UncertainCause, val epoch: Int) : RfspyResult
+
+    /**
+     * v2 immediate NACK ([V2Codec.ACK_BUSY]/[V2Codec.ACK_MTU_TOO_SMALL]/
+     * [V2Codec.ACK_MALFORMED]): the command was DEFINITIVELY NOT executed (discarded before
+     * execution, no completion follows) — safe to retry even for mutating commands. With
+     * the session's single-flight discipline every one of these is a host or config bug;
+     * first cut maps them to LinkTrouble at L2 (plan D4), the I9 tightening comes later.
+     */
+    data class Rejected(val code: Int, val epoch: Int) : RfspyResult
 }
 
 enum class UncertainCause {

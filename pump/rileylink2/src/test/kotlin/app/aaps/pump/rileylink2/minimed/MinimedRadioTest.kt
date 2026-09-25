@@ -133,8 +133,29 @@ class MinimedRadioTest {
 
         assertThat(outcome).isInstanceOf(MinimedRadio.TuneOutcome.Tuned::class.java)
         assertThat((outcome as MinimedRadio.TuneOutcome.Tuned).frequencyMHz).isEqualTo(916.55)
-        // only the quick-path trials ran — no 8-frequency sweep
-        assertThat(fake.txLog.size).isAtMost(MinimedRadio.TUNE_TRIALS)
+        // one wake burst (answered first attempt) + quick-path trials — no 8-frequency sweep
+        assertThat(fake.txLog.size).isAtMost(MinimedRadio.TUNE_TRIALS + 1)
+    }
+
+    @Test
+    fun `tune wakes a duty-cycling pump that ignores bare probes`() = runTest {
+        // 2026-07-04 live-day finding: during PumpUnreachable nothing ever sent a wake
+        // burst, so a pump whose duty-cycling receiver misses bare 0-repeat probes stayed
+        // unreachable for 35-45 min episodes. The pump model: only a repeat burst lands in
+        // a sniff window; once awake it answers everything (for the pump's ~1 min window).
+        val fake = FakeOrangeLink(backgroundScope)
+        var awake = false
+        fake.radioBehavior = { tx ->
+            if (tx.repeatCount > 0) awake = true
+            if (awake && fake.isTunedTo(916.60)) RadioReply.Packet(bytes = encodedReply(pumpModelReply), rssiRaw = 0x4A)
+            else RadioReply.Silence
+        }
+        val radio = radio(fake)
+
+        val outcome = radio.tune(probe, MinimedRadio.US_FREQUENCIES, currentFrequencyMHz = 916.60)
+
+        assertThat(outcome).isInstanceOf(MinimedRadio.TuneOutcome.Tuned::class.java)
+        assertThat((outcome as MinimedRadio.TuneOutcome.Tuned).frequencyMHz).isEqualTo(916.60)
     }
 
     @Test
@@ -145,7 +166,8 @@ class MinimedRadioTest {
         val outcome = radio.tune(probe, MinimedRadio.US_FREQUENCIES)
 
         assertThat(outcome).isEqualTo(MinimedRadio.TuneOutcome.PumpSilent)
-        assertThat(fake.txLog).hasSize(MinimedRadio.US_FREQUENCIES.size * MinimedRadio.TUNE_TRIALS)
+        // the pre-scan wake attempts, then the full 8-frequency x 3-trial sweep
+        assertThat(fake.txLog).hasSize(MinimedRadio.WAKE_ATTEMPTS + MinimedRadio.US_FREQUENCIES.size * MinimedRadio.TUNE_TRIALS)
     }
 
     @Test

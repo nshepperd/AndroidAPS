@@ -215,6 +215,68 @@ but three real bugs surfaced. Loop was silently wedged 03:10–10:22 (restart cl
 3. RL battery polling; journal exposure in the status UI (design §11's remaining half).
 4. Firmware v2 protocol support in L1 (when the firmware agent delivers PROTOCOL-V2.md) +
    FakeOrangeLink second personality + CANCEL-based long-listen wake (Q3 alternative).
+   → IN PROGRESS: PROTOCOL-V2.md delivered; plan + phase status in
+   `docs/rileylink-v2-protocol-v2-plan.md` (branch `emily.protocolv2`).
 5. Delete the now-dead tactical-fix paths from the legacy module IF Eros doesn't want them
    (they do fix real Eros bugs — probably keep; consider upstreaming to nightscout/AndroidAPS).
 6. Consider upstreaming rileylink2 itself once soak-proven.
+
+## Protocol v2 — first live day (flashed 2026-07-03 21:46, reviewed 2026-07-04 20:52)
+
+Build: app @ `1437b7e780` (phase B), firmware `gdac54824 2026-07-03` (`2.2-ol1`).
+
+- **Link plane: flawless.** ONE BLE connection and ONE v2 session for the entire ~23 h.
+  Zero LinkDown, zero session teardowns, zero desync, zero v2 protocol events (no
+  Rejected/BUSY/violation), zero Uncertain. Bring-up markers all correct:
+  `mtu=247`, `device fw='gdac54824 2026-07-03' boot=1 rr=0x4` (DFU reset — as expected
+  post-flash), `protocol v2 active (mtu=247)`, `fw stats 0138…` journaled.
+- **RF plane: six pump-unreachable episodes** (03:17–03:54, 08:58–09:04, 09:23 (4 s),
+  12:52–13:05, 18:07–18:44, 19:52–20:35; ~2.2 h total). Every one recovered UNAIDED via
+  the ladder (F1 behavior confirmed live); tune cooldown held its 3-min cadence (no
+  over-tune). 8 command failures all clustered at episode onsets; 143 TBR/bolus
+  successes otherwise; loop healthy after each recovery. Frequency drifted
+  916.55 → 916.50 → 916.65 across the day.
+- **WATCH ITEM / probable finding — tune never wakes the pump.** `MinimedRadio.tune`
+  sends the GetModel probe with repeatCount=0 and 1.25 s listens; during PumpUnreachable
+  no withPump command runs, so nothing ever sends a 200-repeat wake burst. If the pump is
+  in range but its receiver is duty-cycling, recovery relies on a bare probe landing in a
+  sniff slot — which plausibly explains 35–45 min recoveries (legacy WakeAndTuneTask did
+  wakeUp() BEFORE scanning). Behavioral fix (NOT applied — Emily to approve): supervisor
+  tune path wakes first (`radio.wake` at last-good frequency, then scan), or first trial
+  per frequency uses a wake-style burst. Interacts with Q3/Phase D wake strategy.
+  **DONE 2026-07-12 (Emily approved, `925be91671`)**: `tune()` wakes at last-good (or
+  session-default first scan) frequency before the quick path/sweep; silent wake is not a
+  verdict. Regression test models the duty-cycled pump (answers bursts only). Trigger:
+  marginal-RF night (successes −83…−99, garbles −103/−107), two unreachable episodes,
+  the first taking 18 min of bare-probe tunes to recover.
+- Minor fake-fidelity nit: real GET_STATISTICS payload is 20 bytes; FakeOrangeLink
+  models 18 (`ok(ByteArray(18))`). Align when next touching the fake.
+- Background noise: ~815 `getPumpHistory` frame-ACK retry errors spread evenly over all
+  hours — legacy-typical, self-healing within the frame retry budget.
+
+## Cold-LE-cache incident (2026-07-10) + F8/F9 hardening (DONE, same day)
+
+Incident: phone battery died 07:30, rebooted 12:29; the supervisor then burned 6 h of
+silent 30 s "bring-up timed out" connect attempts (occasional GATT 147) against an
+OrangePro that was advertising fine (laptop scan confirmed). Root cause: directed
+`connectGatt` resolves the LE address TYPE from the stack's device cache — empty after
+reboot, defaulting to PUBLIC — and the OrangePro's `C3:…` random static address ignores
+public-addressed connect requests forever. Manual fix that confirmed it: one scan in the
+RileyLink BLE config dialog → next attempt connected instantly.
+
+Hardening shipped (all four items, minSdk 31→33 for `getRemoteLeDevice`):
+
+- `AndroidBleLink.connect`: explicit `TRANSPORT_LE` (F8 item b), and
+  `getRemoteLeDevice(addr, ADDRESS_TYPE_RANDOM)` when the MSB proves the address can't be
+  an IEEE OUI (top bits 11 + multicast/local bits) — deterministic cache-cold fix for
+  OrangePro/OrangeLink-class devices; ambiguous addresses stay on stack resolution.
+- Supervisor scan-before-connect fallback: from connect attempt ≥ 2
+  (`scanBeforeConnectAfter`), a filtered sighting scan (25 s) must hit before the directed
+  connect — repopulates the cache for ANY address type and journals
+  `scan sighted <name> rssi=<n>`; no sighting counts as a failed attempt (backoff as usual).
+- F8 item a: `MedtronicPumpLinkService` registers `BluetoothAdapter.ACTION_STATE_CHANGED`
+  → `supervisor.setAdapterUp()`; adapter-off proactively closes the live link and the
+  reconnect loop parks in `LinkDown("bluetooth adapter off")` until STATE_ON (no blind
+  attempts against a restarting stack); initial state seeded at supervisor start.
+- Tests: F9 scan-fallback + F8 adapter-gate scenario tests; FakeOrangeLink got
+  `advertising`/`scanCalls` (scan waits out its timeout when not advertising).

@@ -1,10 +1,13 @@
 package app.aaps.pump.rileylink2.link
 
 import app.aaps.pump.rileylink2.ble.BleConnection
+import app.aaps.pump.rileylink2.ble.BleException
 import app.aaps.pump.rileylink2.ble.BleLink
 import app.aaps.pump.rileylink2.ble.CharId
 import app.aaps.pump.rileylink2.minimed.MinimedRadio
+import app.aaps.pump.rileylink2.rfspy.DeviceInfo
 import app.aaps.pump.rileylink2.rfspy.IncompatibleFirmwareException
+import app.aaps.pump.rileylink2.rfspy.ProtocolVariant
 import app.aaps.pump.rileylink2.rfspy.RfspySession
 import app.aaps.pump.rileylink2.rfspy.SessionConfig
 import kotlinx.coroutines.CancellationException
@@ -19,6 +22,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
@@ -67,6 +72,12 @@ class PumpLinkSupervisor(
      *  Enabled by [PumpLinkConfig.batteryPollInterval] > 0. */
     var onBatteryLevel: (Int) -> Unit = {}
 
+    /** Observability hook (§11): every journal NOTE (non-transition record) as it is
+     *  appended — wire to the logger so notes reach logcat like transitions do. This is
+     *  the single delivery channel for device info, v2 status and fw stats; a typed
+     *  DeviceInfo hook existed briefly and was removed as a redundant parallel channel. */
+    var onNote: (String) -> Unit = {}
+
     private val journal = ArrayDeque<LinkTransition>()
     private val startMark = timeSource.markNow()
 
@@ -82,6 +93,11 @@ class PumpLinkSupervisor(
 
     /** One-shot demand from requestTune/reportPumpUnreachable — acts even with no lease held. */
     private val userAction = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Phone Bluetooth adapter state, fed by the integration layer (F8 hardening): while
+     *  false the live link is dropped and reconnects park instead of burning blind 30 s
+     *  connect attempts against a restarting BT stack. */
+    private val adapterUp = MutableStateFlow(true)
 
     private enum class Control { TUNE_REQUESTED, PUMP_UNREACHABLE_REPORTED }
 
@@ -126,6 +142,12 @@ class PumpLinkSupervisor(
         userAction.set(true)
         controls.trySend(Control.PUMP_UNREACHABLE_REPORTED)
         demandSignals.trySend(Unit)
+    }
+
+    /** Adapter on/off from the platform's ACTION_STATE_CHANGED receiver. Off: the live
+     *  connection is closed (distinct cause) and the reconnect loop parks until on. */
+    fun setAdapterUp(up: Boolean) {
+        adapterUp.value = up
     }
 
     fun journalSnapshot(): List<LinkTransition> = synchronized(journal) { journal.toList() }
@@ -173,8 +195,24 @@ class PumpLinkSupervisor(
         }
         var connectAttempt = 0
         while (true) {
+            if (!adapterUp.value) {
+                // F8 hardening: don't burn blind connect attempts against a BT stack that is
+                // off or restarting — park until the platform reports STATE_ON.
+                setState(PumpLinkState.LinkDown("bluetooth adapter off"), "adapter off")
+                adapterUp.first { it }
+                connectAttempt = 0
+            }
             setState(PumpLinkState.BleConnecting(connectAttempt), if (connectAttempt == 0) "connect" else "reconnect")
             val conn = try {
+                if (connectAttempt >= config.scanBeforeConnectAfter) {
+                    // Directed connects fail silently when the stack's LE cache is cold
+                    // (random static address after a phone reboot, 2026-07-10 incident); a
+                    // filtered scan sighting repopulates the cache and proves the device is
+                    // actually there before the next 30 s directed attempt.
+                    val hit = bleLink.scan(config.deviceAddress, config.scanSightingTimeout).firstOrNull()
+                        ?: throw BleException.ConnectFailed(null, "not sighted by scan within ${config.scanSightingTimeout}")
+                    journalNote("scan sighted ${hit.name ?: hit.address} rssi=${hit.rssi}")
+                }
                 bleLink.connect(config.deviceAddress, config.connectTimeout)
             } catch (e: CancellationException) {
                 throw e
@@ -186,10 +224,20 @@ class PumpLinkSupervisor(
             }
             var rssiPoller: Job? = null
             var batteryPoller: Job? = null
+            // Adapter-off during a live link: close it proactively (a dying stack may never
+            // deliver the disconnect callback) — the loop top then parks until STATE_ON.
+            val adapterWatcher = scope.launch {
+                adapterUp.first { !it }
+                runCatching { conn.close() }
+            }
             try {
                 setState(PumpLinkState.SessionInit, "ble operational")
                 epoch++
                 val session = try {
+                    // DIS first, journaled BEFORE rfspy bring-up: in a firmware reboot loop
+                    // every open() fails, and the incrementing boot counter is exactly the
+                    // evidence that must survive those failures.
+                    readDeviceInfo(conn)?.let { info -> journalNote("device $info") }
                     RfspySession.open(conn, sessionConfig(), epoch, scope)
                 } catch (e: IncompatibleFirmwareException) {
                     setState(PumpLinkState.IncompatibleFirmware(e.version), "version probe")
@@ -203,6 +251,13 @@ class PumpLinkSupervisor(
                     continue
                 }
                 connectAttempt = 0
+                if (session.protocolVariant == ProtocolVariant.V2_OL1) {
+                    journalNote(
+                        if (session.v2Active) "protocol v2 active (mtu=${conn.mtu})"
+                        else "protocol v2 FALLBACK to stock: ${session.v2FallbackReason}"
+                    )
+                    session.bringUpStatisticsHex?.let { journalNote("fw stats $it") }
+                }
                 rssiPoller = launchBleRssiPoller(conn)
                 batteryPoller = launchBatteryPoller(conn)
                 val lost = CompletableDeferred<String>()
@@ -212,6 +267,7 @@ class PumpLinkSupervisor(
             } finally {
                 rssiPoller?.cancel()
                 batteryPoller?.cancel()
+                adapterWatcher.cancel()
                 withContext(NonCancellable) { runCatching { conn.close() } }
             }
         }
@@ -395,20 +451,53 @@ class PumpLinkSupervisor(
         (config.backoffFloor * (1 shl (attempt - 1).coerceAtMost(10)))
             .coerceAtMost(config.backoffCeiling)
 
+    /**
+     * DIS build provenance, read like battery/RSSI at L3 (plain GATT, not rfspy). Only an
+     * ABSENT characteristic (vendor RileyLink, old firmware) is the optional case — any
+     * other BleException means the link itself failed and must abort this bring-up attempt
+     * with an honest cause, not be swallowed.
+     */
+    private suspend fun readDeviceInfo(conn: BleConnection): DeviceInfo? =
+        DeviceInfo.of(
+            firmwareRevision = conn.readDisString(CharId.DIS_FIRMWARE_REVISION),
+            softwareRevision = conn.readDisString(CharId.DIS_SOFTWARE_REVISION),
+        )
+
+    private suspend fun BleConnection.readDisString(char: CharId): String? =
+        try {
+            read(char, DIS_READ_TIMEOUT).toString(Charsets.US_ASCII).takeIf { it.isNotBlank() }
+        } catch (_: BleException.ServiceMismatch) {
+            null
+        }
+
+    /** Journal record with `from == to` marking a note, not a state change. [onTransition]
+     *  is deliberately not invoked (notes must not re-trigger state bridging); [onNote]
+     *  carries the text to the logger instead. */
+    private fun journalNote(cause: String) {
+        val current = _state.value
+        appendJournal(LinkTransition(startMark.elapsedNow(), current, current, cause))
+        onNote(cause)
+    }
+
+    private fun appendJournal(entry: LinkTransition) {
+        synchronized(journal) {
+            journal.addLast(entry)
+            while (journal.size > config.journalCapacity) journal.removeFirst()
+        }
+    }
+
     private fun setState(new: PumpLinkState, cause: String) {
         val old = _state.value
         if (old == new) return
         _state.value = new
         val transition = LinkTransition(startMark.elapsedNow(), old, new, cause)
-        synchronized(journal) {
-            journal.addLast(transition)
-            while (journal.size > config.journalCapacity) journal.removeFirst()
-        }
+        appendJournal(transition)
         onTransition(transition)
     }
 
     private companion object {
         val BLE_RSSI_READ_TIMEOUT = 5.seconds
+        val DIS_READ_TIMEOUT = 5.seconds
         const val LOW_BATTERY_PERCENT = 20
     }
 

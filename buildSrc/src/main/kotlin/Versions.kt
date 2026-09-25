@@ -8,7 +8,7 @@ object Versions {
     const val versionCode = 1500
 
     const val compileSdk = 36
-    const val minSdk = 31
+    const val minSdk = 33   // 33: BluetoothAdapter.getRemoteLeDevice (rileylink2 random static addresses)
     const val targetSdk = 32
     const val wearMinSdk = 30
     const val wearTargetSdk = 30

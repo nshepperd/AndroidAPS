@@ -20,6 +20,12 @@ data class PumpLinkConfig(
     val prefs: PumpLinkPrefs,
 
     val connectTimeout: Duration = 30.seconds,
+    /** From this connect attempt on, sight the device in a filtered scan before the directed
+     *  connect — a cold LE cache (phone reboot) makes directed connects to a random static
+     *  address fail silently forever; a scan sighting repopulates the cache (2026-07-10). */
+    val scanBeforeConnectAfter: Int = 2,
+    /** How long one sighting scan waits for an advertisement before counting as a failure. */
+    val scanSightingTimeout: Duration = 25.seconds,
     /** Reconnect backoff (design §5): 0.5 s → 30 s. Jitter injected, deterministic default. */
     val backoffFloor: Duration = 500.milliseconds,
     val backoffCeiling: Duration = 30.seconds,

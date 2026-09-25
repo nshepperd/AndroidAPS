@@ -18,18 +18,29 @@ object GattUuids {
     /** READ-only constant "ble_rfspy 2.0". */
     val CHARA_RADIO_VERSION: UUID = UUID.fromString("30d99dc9-7c91-4295-a051-0a104d238cf2")
 
+    /** Protocol v2 acks/completions (IPS base UUID + 0x5632; NOTIFY only). -ol1 firmware only. */
+    val CHARA_RADIO_RESPONSE_V2: UUID = UUID.fromString("02355632-99c5-4197-b856-69219c2a3845")
+
     val BATTERY_SERVICE: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
     val CHARA_BATTERY_LEVEL: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
+
+    /** Device Information Service: build provenance (firmware ≥ gd5fa522d). */
+    val DIS_SERVICE: UUID = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+    val CHARA_DIS_FIRMWARE_REVISION: UUID = UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb")
+    val CHARA_DIS_SOFTWARE_REVISION: UUID = UUID.fromString("00002a28-0000-1000-8000-00805f9b34fb")
 
     /** OrangeLink extra service (Nordic UART UUID space); firmware/hardware version notify. */
     val ORANGE_SERVICE: UUID = UUID.fromString("6e400001-b5a3-f393-e0a9-e50e24dcca9e")
     val CHARA_NOTIFICATION_ORANGE: UUID = UUID.fromString("6e400003-b5a3-f393-e0a9-e50e24dcca9e")
 
     fun of(char: CharId): UUID = when (char) {
-        CharId.RADIO_DATA           -> CHARA_RADIO_DATA
-        CharId.RADIO_RESPONSE_COUNT -> CHARA_RADIO_RESPONSE_COUNT
-        CharId.RADIO_VERSION        -> CHARA_RADIO_VERSION
-        CharId.BATTERY_LEVEL        -> CHARA_BATTERY_LEVEL
-        CharId.ORANGE_NOTIFICATION  -> CHARA_NOTIFICATION_ORANGE
+        CharId.RADIO_DATA            -> CHARA_RADIO_DATA
+        CharId.RADIO_RESPONSE_COUNT  -> CHARA_RADIO_RESPONSE_COUNT
+        CharId.RADIO_VERSION         -> CHARA_RADIO_VERSION
+        CharId.RADIO_RESPONSE_V2     -> CHARA_RADIO_RESPONSE_V2
+        CharId.BATTERY_LEVEL         -> CHARA_BATTERY_LEVEL
+        CharId.ORANGE_NOTIFICATION   -> CHARA_NOTIFICATION_ORANGE
+        CharId.DIS_FIRMWARE_REVISION -> CHARA_DIS_FIRMWARE_REVISION
+        CharId.DIS_SOFTWARE_REVISION -> CHARA_DIS_SOFTWARE_REVISION
     }
 }

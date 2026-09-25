@@ -1,6 +1,11 @@
 package app.aaps.pump.medtronic.service
 
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Binder
 import android.os.IBinder
 import app.aaps.core.interfaces.logging.AAPSLogger
@@ -87,15 +92,37 @@ open class MedtronicPumpLinkService : DaggerService() {
 
     override fun onBind(intent: Intent): IBinder = binder
 
+    /** F8 hardening: tell the supervisor when the phone's BT adapter goes down/up so it
+     *  drops the link with an honest cause and parks reconnects instead of burning blind
+     *  30 s connect attempts against a restarting stack. */
+    private val btStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                BluetoothAdapter.STATE_TURNING_OFF,
+                BluetoothAdapter.STATE_OFF -> {
+                    aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: bluetooth adapter going down")
+                    supervisor?.setAdapterUp(false)
+                }
+
+                BluetoothAdapter.STATE_ON  -> {
+                    aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: bluetooth adapter up")
+                    supervisor?.setAdapterUp(true)
+                }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         aapsLogger.debug(LTag.PUMPCOMM, "MedtronicPumpLinkService created")
         rileyLinkServiceData.targetDevice = RileyLinkTargetDevice.MedtronicPump
         medtronicUIComm.supervisorAccessor = { supervisor }
+        registerReceiver(btStateReceiver, IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
     }
 
     override fun onDestroy() {
         aapsLogger.debug(LTag.PUMPCOMM, "MedtronicPumpLinkService destroyed")
+        runCatching { unregisterReceiver(btStateReceiver) }
         supervisor?.stop()
         supervisor = null
         scope.cancel()
@@ -147,6 +174,9 @@ open class MedtronicPumpLinkService : DaggerService() {
             signalHistory.recordTransition(transition)
             bridgeState(transition.to)
         }
+        newSupervisor.onNote = { note ->
+            aapsLogger.info(LTag.PUMPBTCOMM, "LINKV2: $note")
+        }
         newSupervisor.onRadioOutcome = signalHistory::recordRadioOutcome
         newSupervisor.onBleRssi = signalHistory::recordBleRssi
         newSupervisor.onBatteryLevel = { percent -> rileyLinkServiceData.batteryLevel = percent }
@@ -154,6 +184,8 @@ open class MedtronicPumpLinkService : DaggerService() {
         configuredAddress = address
         configuredSerial = medtronicPumpStatus.serialNumber
         configuredFrequencyRegion = rileyLinkServiceData.rileyLinkTargetFrequency
+        val adapterEnabled = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter?.isEnabled == true
+        newSupervisor.setAdapterUp(adapterEnabled)
         newSupervisor.start()
         aapsLogger.info(LTag.PUMPCOMM, "LINKV2: supervisor started for $address")
     }

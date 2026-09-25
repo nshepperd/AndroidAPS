@@ -2,6 +2,7 @@ package app.aaps.pump.rileylink2.ble
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -72,14 +73,15 @@ class AndroidBleLink(
     }
 
     override suspend fun connect(address: String, timeout: Duration): BleConnection {
-        val device = adapter?.getRemoteDevice(address)
-            ?: throw BleException.ConnectFailed(null, "bluetooth adapter unavailable")
+        val device = leDevice(address)
         val connection = AndroidBleConnection(log)
         try {
             withTimeout(timeout) {
-                // Some Android stacks require connectGatt on the main thread.
+                // Some Android stacks require connectGatt on the main thread. TRANSPORT_LE is
+                // explicit: TRANSPORT_AUTO on a cold device cache may page BR/EDR and fail
+                // silently (2026-07-02 F8 drill, handoff doc).
                 val gatt = withContext(Dispatchers.Main.immediate) {
-                    device.connectGatt(context, /* autoConnect = */ false, connection.gattCallback)
+                    device.connectGatt(context, /* autoConnect = */ false, connection.gattCallback, BluetoothDevice.TRANSPORT_LE)
                 } ?: throw BleException.ConnectFailed(null, "connectGatt returned null")
                 connection.bringUp(gatt)
             }
@@ -92,6 +94,28 @@ class AndroidBleLink(
         }
         return connection
     }
+
+    /**
+     * Directed connects need the correct LE address TYPE, which getRemoteDevice() resolves
+     * from the stack's device cache — empty after a phone reboot, defaulting to PUBLIC. A
+     * peripheral on a random static address (OrangePro/OrangeLink-class nRF52 devices) then
+     * ignores every connect request until something scans it back into the cache
+     * (2026-07-10 incident: 6 h of silent 30 s bring-up timeouts).
+     *
+     * When the address cannot be a public one — top two bits 11 (random static, Core spec
+     * Vol 6 Part B §1.3.2.1) AND the multicast/locally-administered bits exclude an
+     * IEEE-assigned OUI — pin ADDRESS_TYPE_RANDOM explicitly. Ambiguous addresses (a D8:…
+     * OUI is a valid public MSB with 11 top bits) stay on the stack's own resolution and
+     * are covered by the supervisor's scan-before-connect fallback instead.
+     */
+    private fun leDevice(address: String): BluetoothDevice {
+        val adapter = adapter ?: throw BleException.ConnectFailed(null, "bluetooth adapter unavailable")
+        val msb = address.substringBefore(':').toIntOrNull(16) ?: 0
+        return if (msb and 0xC0 == 0xC0 && msb and 0x03 != 0)
+            adapter.getRemoteLeDevice(address, BluetoothDevice.ADDRESS_TYPE_RANDOM)
+        else
+            adapter.getRemoteDevice(address)
+    }
 }
 
 @SuppressLint("MissingPermission")
@@ -102,10 +126,18 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
 
     private var gatt: BluetoothGatt? = null
     @Volatile private var closed = false
+    @Volatile private var negotiatedMtu = DEFAULT_MTU
+
+    override val mtu: Int get() = negotiatedMtu
 
     /** One outstanding GATT operation (Android requirement); ops carry deadlines. */
     private val opMutex = Mutex()
     @Volatile private var pendingOp: CompletableDeferred<OpResult>? = null
+
+    /** MTU negotiation is tracked separately from [pendingOp]: onMtuChanged is the one GATT
+     *  callback that can fire UNSOLICITED (peer/stack-initiated exchange, co-resident GATT
+     *  client), so it must never be allowed to complete an unrelated in-flight operation. */
+    @Volatile private var pendingMtu: CompletableDeferred<Unit>? = null
 
     private val connected = CompletableDeferred<Unit>()
     private val servicesDiscovered = CompletableDeferred<Unit>()
@@ -153,6 +185,11 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
             pendingOp?.complete(OpResult(status, null, rssi))
         }
 
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) negotiatedMtu = mtu
+            pendingMtu?.complete(Unit)      // NEVER pendingOp — see pendingMtu declaration
+        }
+
         @Deprecated("pre-33 callback")
         override fun onCharacteristicChanged(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
@@ -163,7 +200,7 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
         }
     }
 
-    /** Atomic bring-up (§5): connected → services → RileyLink verified → subscribed. */
+    /** Atomic bring-up (§5): connected → services → RileyLink verified → MTU → subscribed. */
     suspend fun bringUp(gatt: BluetoothGatt) {
         this.gatt = gatt
         connected.await()
@@ -171,8 +208,34 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
         servicesDiscovered.await()
         gatt.getService(GattUuids.RADIO_SERVICE)
             ?: throw BleException.ServiceMismatch("radio service missing — not a RileyLink-compatible device")
+        requestMtu()
         subscribeInternal(GattUuids.CHARA_RADIO_RESPONSE_COUNT)
-        log("LINKV2: bring-up complete for ${gatt.device.address}")
+        log("LINKV2: bring-up complete for ${gatt.device.address}, mtu=$negotiatedMtu")
+    }
+
+    /**
+     * Fully non-fatal, whatever goes wrong: the stock protocol works at MTU 23 (L1 falls
+     * back to it when [mtu] < 131), and some stacks accept requestMtu() but never deliver
+     * onMtuChanged (e.g. MTU already negotiated on the shared ACL link) — that must not
+     * kill a connection that works. Deliberately NOT routed through [executeOp]: its
+     * deadline-expiry path closes the link, and the callback must not touch [pendingOp].
+     */
+    private suspend fun requestMtu() {
+        val changed = CompletableDeferred<Unit>()
+        opMutex.withLock {
+            if (closed) return
+            pendingMtu = changed
+            try {
+                if (!requireGatt().requestMtu(REQUESTED_MTU)) {
+                    log("LINKV2: requestMtu refused by stack; staying at mtu=$negotiatedMtu")
+                    return
+                }
+                if (withTimeoutOrNull(MTU_TIMEOUT) { changed.await() } == null)
+                    log("LINKV2: no onMtuChanged within $MTU_TIMEOUT; staying at mtu=$negotiatedMtu")
+            } finally {
+                pendingMtu = null
+            }
+        }
     }
 
     override suspend fun write(char: CharId, bytes: ByteArray, timeout: Duration) {
@@ -252,6 +315,7 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
             gatt = null
             _events.tryEmit(BleEvent.Closed(cause))
             pendingOp?.completeExceptionally(BleException.LinkClosed(cause))
+            pendingMtu?.complete(Unit)      // unblock a waiting requestMtu; it is non-fatal anyway
             if (!connected.isCompleted) connected.completeExceptionally(BleException.LinkClosed(cause))
             if (!servicesDiscovered.isCompleted) servicesDiscovered.completeExceptionally(BleException.LinkClosed(cause))
         }
@@ -278,5 +342,12 @@ private class AndroidBleConnection(private val log: (String) -> Unit) : BleConne
 
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private val SUBSCRIBE_TIMEOUT = 5.seconds
+        private val MTU_TIMEOUT = 5.seconds
+
+        private const val DEFAULT_MTU = 23
+
+        /** Firmware SoftDevice is configured for 247 (PROTOCOL-V2.md deviation 1); v2 needs
+         *  ≥ 131. Android 14+ coerces the first request to 517 — also fine. */
+        private const val REQUESTED_MTU = 247
     }
 }
