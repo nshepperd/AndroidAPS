@@ -325,4 +325,18 @@
     <string name="steps_shortname">STEPS</string>
     <string name="simple_mode_enabled">Simple mode enabled</string>
 
+    <!-- BG meter -->
+    <string name="bg_meter">Bluetooth BG meter</string>
+    <string name="bg_meter_short">METER</string>
+    <string name="description_bg_meter">Records fingerstick readings from a Bluetooth glucose meter (e.g. Accu-Chek Guide) as BG checks</string>
+    <string name="bg_meter_pair">Scan &amp; pair</string>
+    <string name="bg_meter_forget">Forget meter</string>
+    <string name="bg_meter_none">No meter paired</string>
+    <string name="bg_meter_scanning">Looking for meters…</string>
+    <string name="bg_meter_status_not_paired">not paired</string>
+    <string name="bg_meter_status_no_permission">Bluetooth permission missing</string>
+    <string name="bg_meter_status_pairing">pairing – enter the PIN from the back of the meter</string>
+    <string name="bg_meter_help">To pair: put the meter in pairing mode (Accu-Chek Guide Me: Settings → Wireless → Pairing), tap Scan &amp; pair, choose the meter and enter the 6-digit PIN from its back label. Afterwards readings arrive automatically a few seconds after each test, as long as AAPS is running and Bluetooth is on.</string>
+    <string name="bg_meter_forget_confirm">Stop receiving readings from this meter? To remove the pairing completely, also unpair it in Android Bluetooth settings.</string>
+
 </resources>

@@ -21,6 +21,7 @@ import app.aaps.plugins.insulin.InsulinOrefFreePeakPlugin
 import app.aaps.plugins.insulin.InsulinOrefRapidActingPlugin
 import app.aaps.plugins.insulin.InsulinOrefUltraRapidActingPlugin
 import app.aaps.plugins.main.general.actions.ActionsPlugin
+import app.aaps.plugins.main.general.bgMeter.BgMeterPlugin
 import app.aaps.plugins.main.general.food.FoodPlugin
 import app.aaps.plugins.main.general.overview.OverviewPlugin
 import app.aaps.plugins.main.general.persistentNotification.PersistentNotificationPlugin
@@ -312,6 +313,12 @@ abstract class PluginsListModule {
     @IntoMap
     @IntKey(320)
     abstract fun bindFoodPlugin(plugin: FoodPlugin): PluginBase
+
+    @Binds
+    @AllConfigs
+    @IntoMap
+    @IntKey(330)
+    abstract fun bindBgMeterPlugin(plugin: BgMeterPlugin): PluginBase
 
     @Binds
     @AllConfigs

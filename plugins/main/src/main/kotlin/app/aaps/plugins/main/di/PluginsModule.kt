@@ -15,6 +15,7 @@ import dagger.android.ContributesAndroidInjector
     includes = [
         PluginsModule.Bindings::class,
         FoodModule::class,
+        BgMeterModule::class,
         SMSCommunicatorModule::class,
         ProfileModule::class,
         ProfileModule.Bindings::class,
