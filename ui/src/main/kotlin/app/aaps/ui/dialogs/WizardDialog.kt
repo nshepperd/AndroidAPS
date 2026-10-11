@@ -18,6 +18,7 @@ import android.widget.CompoundButton
 import androidx.fragment.app.FragmentManager
 import app.aaps.core.data.configuration.Constants
 import app.aaps.core.data.model.GlucoseUnit
+import app.aaps.core.data.model.TE
 import app.aaps.core.data.time.T
 import app.aaps.core.interfaces.constraints.ConstraintsChecker
 import app.aaps.core.interfaces.db.PersistenceLayer
@@ -392,6 +393,10 @@ class WizardDialog : DaggerDialogFragment() {
         val bolusIob = iobCobCalculator.calculateIobFromBolus().round()
         val basalIob = iobCobCalculator.calculateIobFromTempBasalsIncludingConvertedExtended().round()
 
+        // A recent fingerstick beats the CGM
+        val bgCheck = persistenceLayer.getLastTherapyRecordUpToNow(TE.Type.FINGER_STICK_BG_VALUE)
+            ?.takeIf { it.timestamp > dateUtil.now() - T.mins(15).msecs() && it.glucose != null }
+
         runOnUiThread {
             _binding ?: return@runOnUiThread
             if (carbsPassedIntoWizard != 0.0) {
@@ -413,7 +418,11 @@ class WizardDialog : DaggerDialogFragment() {
             binding.bgInput.step = if (units == GlucoseUnit.MGDL) 1.0 else 0.1
 
             // Set BG if not old
-            binding.bgInput.value = iobCobCalculator.ads.actualBg()?.valueToUnits(units) ?: 0.0
+            if (bgCheck != null) {
+                binding.bgInput.value = profileUtil.fromMgdlToUnits(profileUtil.convertToMgdl(bgCheck.glucose!!, bgCheck.glucoseUnit), units)
+                binding.bgInputLabel.text = rh.gs(app.aaps.core.ui.R.string.careportal_bgcheck)
+            } else
+                binding.bgInput.value = iobCobCalculator.ads.actualBg()?.valueToUnits(units) ?: 0.0
 
             binding.ttCheckbox.isEnabled = tempTarget != null
             binding.ttCheckboxIcon.visibility = binding.ttCheckbox.isEnabled.toVisibility()
