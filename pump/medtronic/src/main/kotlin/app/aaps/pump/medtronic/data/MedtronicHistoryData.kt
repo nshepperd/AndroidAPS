@@ -869,7 +869,14 @@ class MedtronicHistoryData @Inject constructor(
             val tbr2 = treatment.getDecodedDataEntry("Object") as TempBasalPair
             if (tbr2.isCancelTBR) {
                 if (processDTO != null) {
+                    val plannedDuration = processDTO.durationAsSeconds
                     processDTO.itemTwo = treatment
+                    if (processDTO.durationAsSeconds > plannedDuration) {
+                        // cancel came after the TBR had already run out (e.g. one the pump writes itself
+                        // during a rewind), so it can't have ended it - keep the planned duration
+                        aapsLogger.debug(LTag.PUMP, "Ignoring TBR cancel ${treatment.dt} after expired TBR ${processDTO.itemOne.dt}")
+                        processDTO.itemTwo = null
+                    }
                 } else {
                     aapsLogger.warn(LTag.PUMP, "processDTO was null - shouldn't happen, ignoring item. ItemTwo=$treatment")
                 }

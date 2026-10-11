@@ -12,6 +12,7 @@ import app.aaps.pump.medtronic.data.dto.TempBasalPair
 import app.aaps.pump.medtronic.defs.MedtronicDeviceType
 import app.aaps.pump.medtronic.driver.MedtronicPumpStatus
 import app.aaps.pump.medtronic.util.MedtronicUtil
+import com.google.common.truth.Truth.assertThat
 import com.google.gson.Gson
 import com.google.gson.internal.LinkedTreeMap
 import com.google.gson.reflect.TypeToken
@@ -107,6 +108,45 @@ class MedtronicHistoryDataUTest : MedtronicTestBase() {
             println(tempBasalProcessDTO.toTreatmentString())
         }
 
+    }
+
+    private fun tbrEntry(atechDateTime: Long, rate: Double, durationMinutes: Int): PumpHistoryEntry =
+        PumpHistoryEntry().also {
+            it.setEntryType(medtronicUtil.medtronicPumpModel, PumpHistoryEntryType.TempBasalCombined)
+            it.atechDateTime = atechDateTime
+            it.addDecodedData("Object", TempBasalPair(rate, false, durationMinutes))
+        }
+
+    @Test
+    fun createTBRProcessList_cancelAfterExpiredTbrIsIgnored() {
+        val unitToTest = MedtronicHistoryData(aapsLogger, preferences, rh, medtronicUtil, decoder, medtronicPumpStatus, pumpSync, pumpSyncStorage, uiInteraction, profileUtil)
+
+        // zero TBR for 120 min that ran out at 23:24; the pump wrote a cancel during a rewind at 02:22
+        val processList = unitToTest.createTBRProcessList(
+            mutableListOf(
+                tbrEntry(20261011212403L, 0.0, 120),
+                tbrEntry(20261012022215L, 0.0, 0)
+            )
+        )
+
+        assertThat(processList).hasSize(1)
+        assertThat(processList[0].itemTwo).isNull()
+        assertThat(processList[0].durationAsSeconds).isEqualTo(120 * 60)
+    }
+
+    @Test
+    fun createTBRProcessList_cancelWithinTbrShortensIt() {
+        val unitToTest = MedtronicHistoryData(aapsLogger, preferences, rh, medtronicUtil, decoder, medtronicPumpStatus, pumpSync, pumpSyncStorage, uiInteraction, profileUtil)
+
+        val processList = unitToTest.createTBRProcessList(
+            mutableListOf(
+                tbrEntry(20261011212403L, 0.0, 120),
+                tbrEntry(20261011215403L, 0.0, 0)
+            )
+        )
+
+        assertThat(processList).hasSize(1)
+        assertThat(processList[0].durationAsSeconds).isEqualTo(30 * 60)
     }
 
     @Test
