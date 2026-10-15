@@ -96,6 +96,7 @@ import app.aaps.pump.rileylink2.link.PumpLinkState
 import app.aaps.pump.medtronic.util.MedtronicUtil
 import app.aaps.pump.medtronic.util.MedtronicUtil.Companion.isSame
 import org.joda.time.LocalDateTime
+import org.joda.time.format.DateTimeFormat
 import java.util.Calendar
 import java.util.GregorianCalendar
 import java.util.Locale
@@ -159,6 +160,12 @@ class MedtronicPumpPlugin @Inject constructor(
     private var lastPumpHistoryEntry: PumpHistoryEntry? = null
     private val busyTimestamps: MutableList<Long> = ArrayList()
     private var hasTimeDateOrTimeZoneChanged = false
+
+    // set by the user confirming the over-24h notification; consumed by the next time check
+    @Volatile private var forceTimeChangeOver24h = false
+
+    // set when pump history shows the pump clock was reset (battery change); triggers an immediate time check
+    private var pumpClockResetDetected = false
     private var isBusy = false
 
     override fun onStart() {
@@ -601,18 +608,36 @@ class MedtronicPumpPlugin @Inject constructor(
         }
         if (clock == null) return
         val timeDiff = abs(clock.timeDifference)
+        val forced = forceTimeChangeOver24h
+        forceTimeChangeOver24h = false
         if (timeDiff > 20) {
-            if (clock.localDeviceTime.year <= 2015 || timeDiff <= 24 * 60 * 60) {
-                aapsLogger.info(LTag.PUMP, String.format(Locale.ENGLISH, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - Time difference is %d s. Set time on pump.", timeDiff))
+            // a pump that lost its clock (e.g. battery change) comes back at its default date, years in the past
+            if (clock.pumpTime.year <= 2015 || timeDiff <= 24 * 60 * 60 || forced) {
+                aapsLogger.info(LTag.PUMP, String.format(Locale.ENGLISH, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - Time difference is %d s%s. Set time on pump.", timeDiff, if (forced) " (over 24h, confirmed by user)" else ""))
                 medtronicService?.medtronicUIComm?.executeCommand(MedtronicCommandType.SetRealTimeClock)
                 if (clock.timeDifference == 0) {
+                    medtronicUtil.dismissNotification(MedtronicNotificationType.TimeChangeOver24h, rxBus)
                     uiInteraction.addNotificationValidFor(Notification.INSIGHT_DATE_TIME_UPDATED, rh.gs(R.string.pump_time_updated), Notification.INFO, 60)
                 }
             } else {
-                if (clock.localDeviceTime.year > 2015) {
-                    aapsLogger.error(String.format(Locale.ENGLISH, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - Time difference over 24h requested [diff=%d s]. Doing nothing.", timeDiff))
-                    medtronicUtil.sendNotification(MedtronicNotificationType.TimeChangeOver24h, rh)
-                }
+                aapsLogger.error(String.format(Locale.ENGLISH, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - Time difference over 24h requested [diff=%d s]. Asking user to confirm.", timeDiff))
+                val timeFormat = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm")
+                val pumpTime = clock.pumpTime.toString(timeFormat)
+                val phoneTime = clock.localDeviceTime.toString(timeFormat)
+                uiInteraction.addNotificationWithConfirmation(
+                    id = MedtronicNotificationType.TimeChangeOver24h.notificationType,
+                    text = rh.gs(R.string.medtronic_error_pump_24h_time_change_requested) + " " + rh.gs(R.string.medtronic_pump_time_vs_phone_time, pumpTime, phoneTime),
+                    level = MedtronicNotificationType.TimeChangeOver24h.notificationUrgency,
+                    buttonText = R.string.medtronic_set_pump_time,
+                    confirmation = rh.gs(R.string.medtronic_set_pump_time_over_24h_confirmation, pumpTime, phoneTime),
+                    action = {
+                        aapsLogger.info(LTag.PUMP, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - User confirmed setting pump time despite over 24h difference.")
+                        forceTimeChangeOver24h = true
+                        hasTimeDateOrTimeZoneChanged = true
+                        commandQueue.readStatus(rh.gs(R.string.medtronic_set_pump_time), null)
+                    },
+                    validityCheck = null
+                )
             }
         } else {
             aapsLogger.info(LTag.PUMP, String.format(Locale.ENGLISH, "MedtronicPumpPlugin::checkTimeAndOptionallySetTime - Time difference is %d s. Do nothing.", timeDiff))
@@ -891,6 +916,10 @@ class MedtronicPumpPlugin @Inject constructor(
 //            LOG.error(getLogPrefix() + "readPumpHistory WIP.");
         readPumpHistoryLogic()
         scheduleNextRefresh(MedtronicStatusRefreshType.PumpHistory)
+        if (pumpClockResetDetected) {
+            pumpClockResetDetected = false
+            checkTimeAndOptionallySetTime()
+        }
         if (medtronicHistoryData.hasRelevantConfigurationChanged()) {
             scheduleNextRefresh(MedtronicStatusRefreshType.Configuration, -1)
         }
@@ -966,6 +995,10 @@ class MedtronicPumpPlugin @Inject constructor(
                 "readPumpHistoryLogic: history read failed (${responseTask2?.errorDescription ?: "no task"}), skipping history processing"
             )
             return
+        }
+        if (historyResult.isPumpClockReset) {
+            aapsLogger.warn(LTag.PUMP, "readPumpHistoryLogic: newest pump history entry has a reset clock date, checking pump time now")
+            pumpClockResetDetected = true
         }
         val latestEntry = historyResult.latestEntry
         if (debugHistory) aapsLogger.debug(LTag.PUMP, "Last entry: " + latestEntry)

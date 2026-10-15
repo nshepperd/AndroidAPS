@@ -97,6 +97,9 @@
     <string name="medtronic_notification_check_time_date">Pump clock update needed</string> <!-- combo_notification_check_time_date -->
     <string name="mdt_last_bolus" translatable="false">%1$.1f %2$s (%3$s)</string>
     <string name="pump_time_updated">Pump time updated</string>
+    <string name="medtronic_pump_time_vs_phone_time">Pump: %1$s, phone: %2$s.</string>
+    <string name="medtronic_set_pump_time">Set pump time</string>
+    <string name="medtronic_set_pump_time_over_24h_confirmation">Pump clock differs from phone by more than 24h.\nSet pump time from %1$s to %2$s anyway?</string>
     <string name="set_neutral_temps_title">Set neutral temp basals</string>
     <string name="set_neutral_temps_summary">If enabled, it will cancel a temporary basal before the end of each hour. This method can help stop some pumps beeping/vibrating on the hour.</string>
     <string name="mdt_tbr_remaining">%1$.1f U/h (%2$d min remaining)</string>

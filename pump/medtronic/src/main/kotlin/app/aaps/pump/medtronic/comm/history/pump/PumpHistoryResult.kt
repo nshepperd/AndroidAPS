@@ -20,6 +20,14 @@ class PumpHistoryResult(private val aapsLogger: AAPSLogger, searchEntry: PumpHis
     var unprocessedEntries: MutableList<PumpHistoryEntry> = ArrayList()
     var validEntries: MutableList<PumpHistoryEntry> = ArrayList()
 
+    /**
+     * True when the newest dated entry on the pump is from its default date (<= 2015), i.e. the pump
+     * lost its clock (battery change) and has been writing history since with a reset clock.
+     */
+    var isPumpClockReset = false
+        private set
+    private var newestDatedEntrySeen = false
+
     fun addHistoryEntries(entries: MutableList<PumpHistoryEntry> /*, page: Int*/) {
         unprocessedEntries = entries
         //aapsLogger.debug(LTag.PUMPCOMM,"PumpHistoryResult. Unprocessed entries: {}", MedtronicUtil.getGsonInstance().toJson(entries));
@@ -30,6 +38,12 @@ class PumpHistoryResult(private val aapsLogger: AAPSLogger, searchEntry: PumpHis
     private fun processEntries() {
         var olderEntries = 0
         unprocessedEntries.reverse()
+        if (!newestDatedEntrySeen) {
+            unprocessedEntries.firstOrNull { it.atechDateTime != 0L }?.let {
+                newestDatedEntrySeen = true
+                isPumpClockReset = DateTimeUtil.getYear(it.atechDateTime) <= 2015
+            }
+        }
         when (searchType) {
             SearchType.None      ->                 //aapsLogger.debug(LTag.PUMPCOMM,"PE. None search");
                 validEntries.addAll(unprocessedEntries)

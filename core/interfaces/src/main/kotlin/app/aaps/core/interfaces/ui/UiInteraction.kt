@@ -112,6 +112,17 @@ interface UiInteraction {
     fun addNotificationWithDialogResponse(id: Int, text: String, level: Int, @StringRes buttonText: Int, title: String, message: String, validityCheck: (() -> Boolean)?)
 
     /**
+     * Add notification whose button asks for confirmation before running [action]
+     * @param id if of notification
+     * @text text of notification
+     * @level urgency level of notification
+     * @buttonText label of button
+     * @confirmation message of the confirmation dialog
+     * @action Runnable to be run if the dialog is confirmed
+     */
+    fun addNotificationWithConfirmation(id: Int, text: String, level: Int, @StringRes buttonText: Int, confirmation: String, action: Runnable, validityCheck: (() -> Boolean)?)
+
+    /**
      * Add notification that executes [Runnable] after clicking button
      * @param id if of notification
      * @text text of notification

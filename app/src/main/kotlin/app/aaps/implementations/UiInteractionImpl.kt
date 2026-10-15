@@ -230,6 +230,18 @@ class UiInteractionImpl @Inject constructor(
         )
     }
 
+    override fun addNotificationWithConfirmation(id: Int, text: String, level: Int, @StringRes buttonText: Int, confirmation: String, action: Runnable, validityCheck: (() -> Boolean)?) {
+        rxBus.send(
+            EventNewNotification(
+                notificationWithActionProvider.get().with(id, text, level, validityCheck)
+                    .also { n ->
+                        n.action(buttonText) {
+                            n.contextForAction?.let { OKDialog.showConfirmation(it, confirmation, action) }
+                        }
+                    })
+        )
+    }
+
     override fun addNotification(id: Int, text: String, level: Int, @StringRes actionButtonId: Int, action: Runnable, validityCheck: (() -> Boolean)?) {
         rxBus.send(
             EventNewNotification(
